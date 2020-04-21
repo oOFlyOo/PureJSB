@@ -6,18 +6,10 @@
  */
 
 
-using UnityEngine;
 //using UnityEditor;
 using System;
 using System.Text;
-using System.Reflection;
 using System.Collections.Generic;
-using System.Collections;
-using System.IO;
-using System.Text.RegularExpressions;
-using System.Runtime.InteropServices;
-
-using jsval = JSApi.jsval;
 
 /// <summary>
 /// JSVCall负责C#->Js的调用交互操作
@@ -340,6 +332,7 @@ public class JSVCall
     public int jsCallCount = 0;
 #if UNITY_EDITOR
     public StringBuilder jsCallInfoSb = new StringBuilder();
+    public List<JSCSCallInfo> CallbackInfoList = new List<JSCSCallInfo>();
 #endif
     public bool CallCallback(int iOP, int slot, int index, int isStatic, int argc)
     {
@@ -354,10 +347,32 @@ public class JSVCall
             throw (new Exception("Bad slot: " + slot));
             //return false;
         }
+
+//		if (jsCallCount == 1000 && JSEngine.inst.exceptionWhenTooMuch) {
+//			Debug.LogError ("跨域调用次数太多 jsCallCount："+jsCallCount);
+//			throw (new Exception(">>>CallCallback jsCallCount is too large ! jsCallCount："+jsCallCount));
+//		}
+
         JSMgr.CallbackInfo aInfo = JSMgr.allCallbackInfo[slot];
 #if UNITY_EDITOR
+
+        string tCallName = JSCSCallInfo.GetCallName(aInfo.type,aInfo,op,index,isStatic == 0);
+        JSCSCallInfo tJSCSCallInfo = CallbackInfoList.Find(jSCSCallInfo=>{
+            return jSCSCallInfo.CallName == tCallName;
+        });
+		if(null == tJSCSCallInfo || string.IsNullOrEmpty(tJSCSCallInfo.CallName))
+        {
+            tJSCSCallInfo = JSCSCallInfo.Create(aInfo.type,aInfo,op,index,isStatic == 0);
+            CallbackInfoList.Add(tJSCSCallInfo);
+        }
+        else
+            tJSCSCallInfo.Count ++; 
+
+
         if(JSEngine.inst.showStatistics)
-            jsCallInfoSb.AppendFormat("Type:{0} Op:{1} index:{2}\n", aInfo.type, op, index);
+		{
+			jsCallInfoSb.AppendFormat("Type:{0} Op:{1} index:{2}\n", aInfo.type, op, index);
+		}
 #endif
         if (isStatic == 0)
         {
@@ -421,4 +436,92 @@ public class JSVCall
         }
         return true;
     }
+
+	#if UNITY_EDITOR
+
+	public string JSCSCallLog
+	{
+		get
+		{ 
+            return LogCallList (CallbackInfoList);
+		}
+	}
+
+    private string LogCallList(List<JSCSCallInfo> jSCSCallInfoList)
+    {
+        if (null == jSCSCallInfoList || jSCSCallInfoList.Count <= 0)
+            return string.Empty;
+
+        jSCSCallInfoList.Sort((jSCSCallInfoA, jSCSCallInfoB) =>
+            {
+                if (jSCSCallInfoA.Count != jSCSCallInfoB.Count)
+                    return jSCSCallInfoB.Count.CompareTo(jSCSCallInfoA.Count);
+                return jSCSCallInfoA.CallName.CompareTo(jSCSCallInfoB.CallName);
+            });
+
+        StringBuilder tStringBuilder = new StringBuilder();
+        jSCSCallInfoList.ForEach(jSCSCallInfo =>
+            {
+				tStringBuilder.AppendFormat("{0} (Count) , JsCsCall: {1}\n", jSCSCallInfo.Count,jSCSCallInfo.CallName);
+            });
+        return tStringBuilder.ToString();
+    }
+
+	public class JSCSCallInfo
+    {
+        public string CallName;
+        public int Count;
+
+        public static JSCSCallInfo Create(Type type,JSMgr.CallbackInfo aInfo,Oper op,int index,bool isStatic)
+        {
+            return new JSCSCallInfo (){ 
+                CallName = GetCallName(type,aInfo,op,index,isStatic),
+                Count = 1,
+            };
+        }
+
+        public static string GetCallName(Type type,JSMgr.CallbackInfo aInfo,Oper op,int index,bool isStatic)
+        {
+            switch (op)
+            {
+                case Oper.GET_FIELD:
+                case Oper.SET_FIELD:
+                    {
+                        JSMgr.CSCallbackField fun = aInfo.fields[index];
+                        if (fun == null)
+                        {
+                            throw (new Exception("Field not found"));
+                            //return false;
+                        }
+                        return fun.Method.ToString ();
+                    }
+                    break;
+                case Oper.GET_PROPERTY:
+                case Oper.SET_PROPERTY:
+                    {
+                        JSMgr.CSCallbackProperty fun = aInfo.properties[index];
+                        if (fun == null)
+                        {
+                            throw (new Exception("Property not found"));
+                            //return false;
+                        }
+                        return fun.Method.ToString ();
+                    }
+                    break;
+                case Oper.METHOD:
+                case Oper.CONSTRUCTOR:
+                    {
+                        JSMgr.MethodCallBackInfo[] arrMethod;
+                        if (op == Oper.METHOD)
+                            arrMethod = aInfo.methods;
+                        else
+                            arrMethod = aInfo.constructors;
+
+                        return arrMethod [index].fun.Method.ToString ();
+                    }
+            }
+            return type.ToString ();
+        }
+    }
+	#endif
 }

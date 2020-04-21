@@ -3,7 +3,12 @@ using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Reflection;
+using System.Text;
+using DG.Tweening;
+using DG.Tweening.Core;
+using LITJson;
 using Debug = UnityEngine.Debug;
 using jsval = JSApi.jsval;
 /// <summary>
@@ -37,6 +42,12 @@ public class JSEngine : MonoBehaviour
      */
     public float GCInterval = -1f;
 
+#if UNITY_EDITOR
+    /// <summary>
+    /// js和cs间跨域调用超过多少次时提示
+    /// </summary>
+    public int JsCallCsWarnCount = 100;
+#endif
     /*
      * 
      */
@@ -122,11 +133,13 @@ public class JSEngine : MonoBehaviour
                 inst = jse;
 #if UNITY_EDITOR
                 //编辑器模式下默认输出JSEngine统计数据
-                inst.showStatistics = true;
+                inst.showStatistics = false;
 #endif
 
                 Stopwatch stopwatch = Stopwatch.StartNew();
+                JSFileLoader.StartLoading();
                 JSMgr.InitJSEngine(jse.OnInitJSEngine);
+                JSFileLoader.EndLoading();
                 stopwatch.Stop();
                 Debug.Log("==============InitJSEngine: " + stopwatch.ElapsedMilliseconds + " ms");
             }
@@ -158,11 +171,19 @@ public class JSEngine : MonoBehaviour
         jsCallCSPerFrame = JSMgr.vCall.jsCallCount;
         JSMgr.vCall.jsCallCount = 0;
 #if UNITY_EDITOR
+        if(jsCallCSPerFrame >= JsCallCsWarnCount)
+        {
+            // 太多Log了，临时屏蔽
+//            Debug.LogError (string.Format("JS->CS 跨域调用次数（{0}）太多,请检查 JSCSCallLog :\n{1}！",jsCallCSPerFrame,JSMgr.vCall.JSCSCallLog));
+        }
+        JSMgr.vCall.CallbackInfoList.Clear();
+
         if (JSMgr.vCall.jsCallInfoSb.Length > 0)
         {
             jsCallLogInfo = JSMgr.vCall.jsCallInfoSb.ToString();
             JSMgr.vCall.jsCallInfoSb.Length = 0;
         }
+
 #endif
 
         UpdateThreadSafeActions();
@@ -246,6 +267,10 @@ public class JSEngine : MonoBehaviour
     }
 
     float accum = 0f;
+#if UNITY_EDITOR
+    private float lastTime;
+#endif
+
     void LateUpdate()
     {
         if (this != JSEngine.inst)
@@ -266,6 +291,13 @@ public class JSEngine : MonoBehaviour
                 }
             }
         }
+#if UNITY_EDITOR
+        if (lastTime + 15 < Time.realtimeSinceStartup)
+        {
+            lastTime = Time.realtimeSinceStartup;
+            //GenerateJs2CsRef();
+        }
+#endif
     }
 
     void FixedUpdate()
@@ -294,7 +326,7 @@ public class JSEngine : MonoBehaviour
         }
     }
 
-	public bool showStatistics = true;
+	public bool showStatistics = false;
     public Vector2 scrollPos = Vector2.zero;
 #if !UNITY_EDITOR
     /// <summary>
@@ -366,4 +398,160 @@ public class JSEngine : MonoBehaviour
 
         return sliderPos;
     }
+#if UNITY_EDITOR
+#region 内存泄漏查询工具
+    private static Dictionary<int, RelLoger> relLogers = new Dictionary<int, RelLoger>();
+    private static int generateCount = 0;
+    public static void GenerateJs2CsRef()
+    {
+        GC.Collect();
+        JSApi.gc();
+        DateTime dateTime = DateTime.Now;
+        StringBuilder stringBuilder = new StringBuilder();
+
+        GenerateLog(stringBuilder);
+
+        File.WriteAllText(string.Format("Dic1_{0}_{1}_{2}_{3}.csv", dateTime.Day, dateTime.Hour, dateTime.Minute, dateTime.Second), stringBuilder.ToString());
+        generateCount++;
+    }
+
+    private static void GenerateLog(StringBuilder stringBuilder)
+    {
+        Dictionary<int, RelLoger> newRelLogers = new Dictionary<int, RelLoger>(relLogers.Count);
+        Dictionary<int, JSMgr.JS_CS_Rel> dic1 = JSMgr.GetDict1();
+        foreach (var item in dic1)
+        {
+            try
+            {
+                RelLoger relLoger;
+                if (relLogers.TryGetValue(item.Key, out relLoger) == false)
+                {
+                    relLoger = new RelLoger(item.Key, item.Value.csObj);
+                }
+                relLoger.AddRelSurvival(item.Value.csObj, generateCount);
+                newRelLogers.Add(item.Key, relLoger);
+                //只输出已经Destroy的
+                if(relLoger.isUnityObj && relLoger.list[relLoger.list.Count - 1].isDestroy)
+                    stringBuilder.AppendLine(relLoger.ToString());
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+
+        }
+        relLogers = newRelLogers;
+    }
+    //每个对象信息
+    private class RelLoger
+    {
+        public List<RelGenerationLoger> list = new List<RelGenerationLoger>();
+        public readonly int jsObjID;
+        public readonly bool isUnityObj;
+        public readonly string typeName;
+        public RelLoger(int jsObjID, object csObj)
+        {
+            this.jsObjID = jsObjID;
+            isUnityObj = csObj is UnityEngine.Object;
+            typeName = csObj.GetType().FullName;
+        }
+
+        public void AddRelSurvival(object csObj, int generationCount)
+        {
+            if(list.Count != 0 && list[list.Count - 1].generationCount == generationCount)
+                return;
+            
+            RelGenerationLoger relGenerationLoger = new RelGenerationLoger(csObj, generationCount);
+            list.Add(relGenerationLoger);
+        }
+
+        public override string ToString()
+        {
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.AppendFormat("{0},{1},{2},", jsObjID, typeName, isUnityObj);
+            ////保持同一代的输出在同一列
+            //int startGenerationCount = list[0].generationCount;
+            //for (int i = 0; i < startGenerationCount; i++)
+            //{
+            //    stringBuilder.Append(",,,,");
+            //}
+            //foreach (RelGenerationLoger item in list)
+            //{
+            //    stringBuilder.Append(item.ToString());
+            //    stringBuilder.Append(',');
+            //}
+            stringBuilder.AppendFormat("{0},{1},{2}", list[0].path, list[0].generationCount, list[list.Count - 1].generationCount);
+            return stringBuilder.ToString();
+        }
+    }
+    //每代的信息
+    private class RelGenerationLoger
+    {
+        public readonly string path;
+        public readonly bool isDestroy;
+        public readonly int generationCount;
+        public readonly bool isUnityObj;
+
+        public RelGenerationLoger(object csObj, int generationCount)
+        {
+            this.generationCount = generationCount;
+            isUnityObj = csObj is UnityEngine.Object;
+            if (isUnityObj)
+            {
+                UnityEngine.Object @object = csObj as UnityEngine.Object;
+                isDestroy = @object == null;
+                if (isDestroy == false)
+                    path = GetCSObjPath(@object);
+                else
+                    path = String.Empty;
+            }
+            else
+            {
+                path = string.Empty;
+                isDestroy = false;
+            }
+        }
+
+        private string GetCSObjPath(UnityEngine.Object obj)
+        {
+            Transform transform = null;
+            if (obj is Transform)
+            {
+                transform = obj as Transform;
+            }
+            else if(obj is Component)
+            {
+                transform = (obj as Component).transform;
+            }
+            else if(obj is GameObject)
+            {
+                transform = (obj as GameObject).transform;
+            }
+
+
+            if (transform != null)
+            {
+                return GetPathByTransform(transform, new StringBuilder()).ToString();
+            }
+            return obj.name;
+        }
+
+        private StringBuilder GetPathByTransform(Transform trans, StringBuilder path)
+        {
+            path.Insert(0, trans.name);
+            if (trans.parent != null)
+            {
+                path.Insert(0, '/');
+                return GetPathByTransform(trans.parent, path);
+            }
+            return path;
+        }
+
+        public override string ToString()
+        {
+            return string.Format("{0},isDestroy:{2},{1}, isUnityObj:{3}", generationCount, path, isDestroy, isUnityObj);
+        }
+    }
+    #endregion
+#endif
 }

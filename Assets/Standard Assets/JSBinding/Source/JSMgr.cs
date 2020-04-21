@@ -115,6 +115,8 @@ public static class JSMgr
         }
 
         CSGenerateRegister.RegisterAll();
+        JSCache.InitJsTypeConfig();
+
         onInitJSEngine(true);
 
         //if (!RefCallStaticMethod("CSGenerateRegister", "RegisterAll"))
@@ -129,7 +131,6 @@ public static class JSMgr
         //    ret = true;
         //}
 
-        JSCache.InitJsTypeConfig();
         InitJSEngine_ing = false;
         return true;
     }
@@ -210,6 +211,7 @@ public static class JSMgr
         allCallbackInfo.Clear();
         MoveJSCSRel2Old();
         mDictJSFun1.Clear();
+        mDictJSFunStack.Clear();
         evaluatedScript.Clear();
         CSRepresentedObject.s_objCount = 0;
         CSRepresentedObject.s_funCount = 0;
@@ -298,7 +300,7 @@ public static class JSMgr
 
         if (bytes == null)
         {
-            Debug.LogError(jsScriptName + "file bytes is null");
+            Debug.LogError(jsScriptName + " file bytes is null");
             return false;
         }
         else if (bytes.Length == 0)
@@ -502,6 +504,12 @@ public static class JSMgr
             {
                 Debug.LogError("mDictionary2 and mDictionary1 saves different object");
             }
+            else if (oldObj.Equals(null) != newObj.Equals(null))
+            {
+                // Unity 神奇的比较，同一资源，释放之后同时加载
+                Debug.LogErrorFormat("有趣，暂时发现Unity资源是这么神奇，可以忽略：{0} {1}", oldObj, newObj);
+                Rel.csObj = csObj;
+            }
 #endif
             return Rel.jsObjID;
         }
@@ -551,46 +559,77 @@ public static class JSMgr
         countDict2 = mDictionary2.Count;
     }
     public static Dictionary<int, JS_CS_Rel> GetDict1() { return mDictionary1; }
+    public static Dictionary<object, JS_CS_Rel> GetDict2() { return mDictionary2; }
 
     #endregion
 
     #region JS<->CS fun<->Delegate relationship
 
     // key = jsFuncId, Value = JS_CS_FunRel(Delegate, Delegate.GetHashCode())
-    static Dictionary<int, WeakReference> mDictJSFun1 = new Dictionary<int, WeakReference>();
+    static Dictionary<int, Dictionary<Type, WeakReference>> mDictJSFun1 = new Dictionary<int, Dictionary<Type, WeakReference>>();
+    static Stack<Dictionary<Type, WeakReference>> mDictJSFunStack = new Stack<Dictionary<Type, WeakReference>>();
 
     public static T getJSFunCSDelegateRel<T>(int funID)
     {
+        Dictionary<Type, WeakReference> dic = null;
         WeakReference wr = null;
-        if (mDictJSFun1.TryGetValue(funID, out wr))
+        if (mDictJSFun1.TryGetValue(funID, out dic) && dic.TryGetValue(typeof(T), out wr))
         {
             object obj = wr.Target;
-            if(obj == null)
+            if (obj == null)
                 Debug.LogError("ERROR getJSFunCSDelegateRel rel.wr.Target == null");
 
-            return (T) obj;
+            return (T)obj;
         }
         return default(T);
     }
     public static void addJSFunCSDelegateRel(int funID, Delegate del)
     {
+        if (del == null) return;
         if (!mDictJSFun1.ContainsKey(funID))
         {
+            Dictionary<Type, WeakReference> dict;
+            if (mDictJSFunStack.Count == 0)
+            {
+                dict = new Dictionary<Type, WeakReference>(1);
+            }
+            else
+            {
+                dict = mDictJSFunStack.Pop();
+            }
+            // 一般就一种类型，每个都用Dict有点浪费
+            mDictJSFun1.Add(funID, dict);
+        }
+        var type = del.GetType();
+        if (!mDictJSFun1[funID].ContainsKey(type))
+        {
             var wr = new WeakReference(del);
-            mDictJSFun1.Add(funID, wr);
+            mDictJSFun1[funID].Add(type, wr);
         }
     }
     public static void removeJSFunCSDelegateRel(int funID)
     {
-        mDictJSFun1.Remove(funID);
+        Dictionary<Type, WeakReference> dict;
+        if (mDictJSFun1.TryGetValue(funID, out dict))
+        {
+            mDictJSFun1.Remove(funID);
+            dict.Clear();
+            mDictJSFunStack.Push(dict);
+        }
     }
     public static int getFunIDByDelegate(Delegate del)
     {
+        if (del == null) return 0;
         foreach (var pair in mDictJSFun1)
         {
-            Delegate target = (Delegate)pair.Value.Target;
-            if (target != null && target == del)
-                return pair.Key;
+            var tDic = pair.Value;
+            if (tDic == null || tDic.Count == 0 || !tDic.ContainsKey(del.GetType())) continue;
+            foreach (var item in tDic.Values)
+            {
+                Delegate target = (Delegate)item.Target;
+                if (target != null && target == del)
+                    return pair.Key;
+            }
         }
         return 0;
     }
