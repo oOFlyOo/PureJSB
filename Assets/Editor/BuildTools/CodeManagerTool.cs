@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using AssetPipeline;
 using UnityEditor;
 using UnityEngine;
 
@@ -16,12 +17,20 @@ public class CodeManagerTool
     public static readonly string[] JSB_FilterFileOrDirectory =
     {
         "/Scripts",
+        //"/Scripts/GameProtocol/app-clientservice/AppProtobuf",
+        //"/Scripts/MyTestScripts",
         "/Plugins/uLua",
         "/Plugins/ulua.bundle",
         "/Plugins/IOS/libulua.a",
         "/Plugins/Android/libs/armeabi-v7a/libulua.so",
         "/Plugins/Android/libs/x86/libulua.so",
         "/Plugins/Protobuf-net"
+    };
+
+    //jsb模式下需要保留的目录或文件
+    public static readonly string[] JSB_FilterFileOrDirectory_Backup =
+    {
+        "/Scripts/GameProtocol/app-clientservice/javascript"
     };
 
     public static readonly string[] Mono_FilterFileOrDirectory =
@@ -31,7 +40,7 @@ public class CodeManagerTool
         "/Scripts/JsbUnitTest",
         "/Plugins/IOS/libMozjsWrap.a",
         "/Plugins/IOS/libjs_static.a",
-        "/Plugins/Android/libmozjswrap.so",
+        "/Plugins/Android/libs/libmozjswrap.so",
         "/Plugins/mozjswrap.bundle",
         "/Plugins/x86/mozjs-31.dll",
         "/Plugins/x86/mozjswrap.dll",
@@ -40,7 +49,7 @@ public class CodeManagerTool
         "/Plugins/x86_64/mozjs-31.lib"
     };
 
-    [MenuItem("JSB/Fix Win Load Dll not found", false, 150)]
+    [MenuItem("JSB/Fix Win Load Dll not found", false, 160)]
     public static void CopyMozjsDllToEditorFolder()
     {
         try
@@ -53,7 +62,7 @@ public class CodeManagerTool
         }
         catch (Exception e)
         {
-            Debug.LogError(e.Message);
+            Debug.LogException(e);
         }
     }
 
@@ -78,7 +87,7 @@ public class CodeManagerTool
             return;
         }
 
-        string metaFile = AssetDatabase.GetTextMetaDataPathFromAssetPath(filePath);
+        string metaFile = AssetDatabase.GetTextMetaFilePathFromAssetPath(filePath);
         if (!string.IsNullOrEmpty(metaFile))
         {
             FileUtil.DeleteFileOrDirectory(metaFile);
@@ -99,9 +108,9 @@ public class CodeManagerTool
             return;
         }
 
-        JSBFileHelper.CreateDirectory(Path.GetDirectoryName(newPath));
+        FileHelper.CreateDirectory(Path.GetDirectoryName(newPath));
 
-        string metaFile = AssetDatabase.GetTextMetaDataPathFromAssetPath(oldPath);
+        string metaFile = AssetDatabase.GetTextMetaFilePathFromAssetPath(oldPath);
         if (!string.IsNullOrEmpty(metaFile))
         {
             string newMetaFile;
@@ -121,7 +130,48 @@ public class CodeManagerTool
             }
             catch (Exception e)
             {
-                Debug.LogError(e.Message);
+                Debug.LogException(e);
+            }
+        }
+        else
+        {
+            Debug.LogError("Can find MetaFile: " + oldPath);
+        }
+    }
+
+    private static void CopyFile(string oldPath, string newPath, string tempRoot)
+    {
+        bool existsFile = File.Exists(oldPath);
+        bool existsDir = Directory.Exists(oldPath);
+        if (!existsFile && !existsDir)
+        {
+            Debug.LogError(string.Format("不存在文件或目录：{0}", oldPath));
+            return;
+        }
+
+        FileHelper.CreateDirectory(Path.GetDirectoryName(newPath));
+
+        string metaFile = AssetDatabase.GetTextMetaFilePathFromAssetPath(oldPath);
+        if (!string.IsNullOrEmpty(metaFile))
+        {
+            string newMetaFile;
+            if (metaFile.Contains(tempRoot))
+            {
+                newMetaFile = Application.dataPath + metaFile.Replace(tempRoot, "");
+            }
+            else
+            {
+                newMetaFile = tempRoot + metaFile.Remove(0, "Assets".Length);
+            }
+
+            try
+            {
+                FileUtil.CopyFileOrDirectory(oldPath, newPath);
+                FileUtil.CopyFileOrDirectory(metaFile, newMetaFile);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
             }
         }
         else
@@ -150,12 +200,11 @@ public class CodeManagerTool
 
         string defineSymbols = string.Join(";", definesList.ToArray());
 #if UNITY_IPHONE
-        PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.iPhone, defineSymbols);
+        PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.iOS, defineSymbols);
 #elif UNITY_ANDROID
         PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android, defineSymbols);
 #else
         PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.Standalone, defineSymbols);
-        PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.WebPlayer, defineSymbols);
 #endif
     }
 
@@ -187,10 +236,23 @@ public class CodeManagerTool
         return result.ToList();
     }
 
+    private static List<string> GetJSBNeedMoveFileList_Backup()
+    {
+        var result = new HashSet<string>();
+
+        //指定文件或目录
+        for (int i = 0; i < JSB_FilterFileOrDirectory_Backup.Length; i++)
+        {
+            result.Add(JSB_FilterFileOrDirectory_Backup[i]);
+        }
+
+        return result.ToList();
+    }
+
     public static List<string> GetDefineSymbols()
     {
 #if UNITY_IPHONE
-        string symbolsDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.iPhone);
+        string symbolsDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.iOS);
 #elif UNITY_ANDROID
         string symbolsDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android);
 #else
@@ -202,7 +264,14 @@ public class CodeManagerTool
     [MenuItem("JSB/CodeManager/Move UnUsed MonoCode", false, 100)]
     public static void MoveUnUsedMonoCode()
     {
-        if (!EditorUtility.DisplayDialog("移动代码", "确认是否移动JSB框架不需要的代码", "确认", "取消"))
+        moveUnUsedMonoCode();
+    }
+
+    public static void moveUnUsedMonoCode(bool cmd = false)
+    {
+        return;
+
+        if (!cmd && !EditorUtility.DisplayDialog("移动代码", "确认是否移动JSB框架不需要的代码", "确认", "取消"))
         {
             return;
         }
@@ -214,11 +283,25 @@ public class CodeManagerTool
             string oldPath = "Assets" + file;
             string newPath = TempJSBCodeRoot + file;
             MoveFile(oldPath, newPath, TempJSBCodeRoot);
-            EditorUtility.DisplayProgressBar("移动文件到临时目录中", string.Format(" {0} / {1} ", i, needMoveFiles.Count),
-                i / (float)needMoveFiles.Count);
+            if (i == 0) //优化mac下显示进度条耗时
+            {
+                EditorUtility.DisplayProgressBar("移动文件到临时目录中", string.Format(" {0} / {1} ", i, needMoveFiles.Count),
+                    i / (float)needMoveFiles.Count);
+            }
         }
 
-        AssetDatabase.Refresh();
+        var needBackupFiles = GetJSBNeedMoveFileList_Backup();
+        for (int i = 0; i < needBackupFiles.Count; i++)
+        {
+            var file = needBackupFiles[i];
+            string oldPath = TempJSBCodeRoot + file;
+            string newPath = "Assets" + file;
+            CopyFile(oldPath, newPath, TempJSBCodeRoot);
+        }
+
+
+        if(!cmd)
+            AssetDatabase.Refresh();
         EditorUtility.ClearProgressBar();
     }
 
@@ -230,6 +313,20 @@ public class CodeManagerTool
             return;
         }
 
+        revertUnUsedMonoCode();
+    }
+
+    public static void revertUnUsedMonoCode(bool cmd = false)
+    {
+        DeleteFile("Assets/Scripts");
+        var needBackupFiles = GetJSBNeedMoveFileList_Backup();
+        for (int i = 0; i < needBackupFiles.Count; i++)
+        {
+            var file = needBackupFiles[i];
+            string deletePath = "Assets" + file;
+            FileUtil.DeleteFileOrDirectory(deletePath);
+        }
+
         var needMoveFiles = GetJSBNeedMoveFileList();
         for (int i = 0; i < needMoveFiles.Count; i++)
         {
@@ -237,12 +334,14 @@ public class CodeManagerTool
             string oldPath = TempJSBCodeRoot + file;
             string newPath = "Assets" + file;
             MoveFile(oldPath, newPath, TempJSBCodeRoot);
-            EditorUtility.DisplayProgressBar("移回所有文件到原本目录中", string.Format(" {0} / {1} ", i, needMoveFiles.Count),
-                i / (float)needMoveFiles.Count);
+            if (i == 0) //优化mac下显示进度条耗时
+            {
+                EditorUtility.DisplayProgressBar("移回所有文件到原本目录中", string.Format(" {0} / {1} ", i, needMoveFiles.Count),
+                    i / (float)needMoveFiles.Count);
+            }
         }
-
-        DeleteFile(TempJSBCodeRoot.Replace("/Editor", ""));
         AssetDatabase.Refresh();
+        DeleteFile(TempJSBCodeRoot.Replace("/Editor", ""));
         EditorUtility.ClearProgressBar();
     }
 
@@ -260,8 +359,11 @@ public class CodeManagerTool
             var file = needRemoveFiles[i];
             string oldPath = "Assets" + file;
             DeleteFile(oldPath);
-            EditorUtility.DisplayProgressBar("删除文件中", string.Format(" {0} / {1} ", i, needRemoveFiles.Count),
+            if (i == 0) //优化mac下显示进度条耗时
+            {
+                EditorUtility.DisplayProgressBar("删除文件中", string.Format(" {0} / {1} ", i, needRemoveFiles.Count),
                 i / (float)needRemoveFiles.Count);
+            }
         }
 
         AssetDatabase.Refresh();
@@ -273,9 +375,9 @@ public class CodeManagerTool
     #region Mono原生框架相关
 
     [MenuItem("JSB/CodeManager/ChangeToJSB", true, 1)]
-    [MenuItem("JSB/CodeManager/Move JSBFramework", true, 200)]
-    [MenuItem("JSB/CodeManager/Revert JSBFramework", true, 200)]
-    [MenuItem("JSB/CodeManager/Remove JSBFramework", true, 200)]
+//    [MenuItem("JSB/CodeManager/Move JSBFramework", true, 200)]
+//    [MenuItem("JSB/CodeManager/Revert JSBFramework", true, 200)]
+//    [MenuItem("JSB/CodeManager/Remove JSBFramework", true, 200)]
     public static bool ValidateMonoOption()
     {
         return !EnableJSB;
@@ -297,12 +399,11 @@ public class CodeManagerTool
 
         string defineSymbols = string.Join(";", definesList.ToArray());
 #if UNITY_IPHONE
-        PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.iPhone, defineSymbols);
+        PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.iOS, defineSymbols);
 #elif UNITY_ANDROID
         PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android, defineSymbols);
 #else
         PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.Standalone, defineSymbols);
-        PlayerSettings.SetScriptingDefineSymbolsForGroup(BuildTargetGroup.WebPlayer, defineSymbols);
 #endif
     }
 
@@ -318,10 +419,18 @@ public class CodeManagerTool
         return result.ToList();
     }
 
-    [MenuItem("JSB/CodeManager/Move JSBFramework", false, 200)]
+//    [MenuItem("JSB/CodeManager/Move JSBFramework", false, 200)]
     public static void MoveJSBFramework()
     {
-        if (!EditorUtility.DisplayDialog("移动代码", "确认是否移动Mono框架不需要的代码", "确认", "取消"))
+        moveJSBFramework();
+    }
+
+    public static void moveJSBFramework(bool cmd = false)
+    {
+        // 多余，不需要，Android没必要移动，文件并不多
+        return;
+
+        if (!cmd && !EditorUtility.DisplayDialog("移动代码", "确认是否移动Mono框架不需要的代码", "确认", "取消"))
         {
             return;
         }
@@ -336,19 +445,18 @@ public class CodeManagerTool
             EditorUtility.DisplayProgressBar("移动文件到临时目录中", string.Format(" {0} / {1} ", i, needMoveFiles.Count),
                 i / (float)needMoveFiles.Count);
         }
-
-        AssetDatabase.Refresh();
+        if(!cmd)
+            AssetDatabase.Refresh();
         EditorUtility.ClearProgressBar();
     }
 
-    [MenuItem("JSB/CodeManager/Revert JSBFramework", false, 200)]
+//    [MenuItem("JSB/CodeManager/Revert JSBFramework", false, 200)]
     public static void RevertJSBFramework()
     {
         if (!EditorUtility.DisplayDialog("恢复代码", "是否还原Mono框架移动过的代码", "确认", "取消"))
         {
             return;
         }
-
         var needMoveFiles = GetMonoNeedMoveFileList();
         for (int i = 0; i < needMoveFiles.Count; i++)
         {
@@ -359,13 +467,12 @@ public class CodeManagerTool
             EditorUtility.DisplayProgressBar("移回所有文件到原本目录中", string.Format(" {0} / {1} ", i, needMoveFiles.Count),
                 i / (float)needMoveFiles.Count);
         }
-
-        DeleteFile(TempMonoCodeRoot.Replace("/Editor", ""));
         AssetDatabase.Refresh();
+        DeleteFile(TempMonoCodeRoot.Replace("/Editor", ""));
         EditorUtility.ClearProgressBar();
     }
 
-    [MenuItem("JSB/CodeManager/Remove JSBFramework", false, 200)]
+//    [MenuItem("JSB/CodeManager/Remove JSBFramework", false, 200)]
     public static void RemoveJSBFramework()
     {
         if (!EditorUtility.DisplayDialog("移除代码", "确认是否移除Mono框架不需要的代码", "确认", "取消"))

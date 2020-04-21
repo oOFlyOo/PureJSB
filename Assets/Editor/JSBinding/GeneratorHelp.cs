@@ -86,6 +86,12 @@ public static class GeneratorHelp
 
     public static int MethodInfoComparison(MethodInfoAndIndex mi1, MethodInfoAndIndex mi2)
     {
+        var result = JsFrameworkUpgrade.MethodInfoComparison(mi1, mi2);
+        if (result != 0)
+        {
+            return result;
+        }
+
         var m1 = mi1.method;
         var m2 = mi2.method;
 
@@ -205,6 +211,7 @@ public static class GeneratorHelp
             lstPro.Add(new PropertyInfoAndIndex(pro, i));
         }
 
+        lstPro = JsFrameworkUpgrade.SortPropertyInfoList(type, lstPro);
 
         for (int i = 0; i < ti.methods.Length; i++)
         {
@@ -236,6 +243,8 @@ public static class GeneratorHelp
                     method.Name == "op_LessThanOrEqual" ||
                     method.Name == "op_GreaterThan" ||
                     method.Name == "op_GreaterThanOrEqual" ||
+                    // SharpKit自己都不支持，就不搞支持了，自己封装接口吧
+//                    method.Name == "op_Explicit" ||
                     method.Name == "op_Implicit")
                 {
                     if (!method.IsStatic)
@@ -246,6 +255,12 @@ public static class GeneratorHelp
                 }
                 else if (method.Name.StartsWith("add_") || method.Name.StartsWith("remove_"))
                 {
+                    var eventName = method.Name.Replace("add_", "").Replace("remove_", "");
+                    var realEvent = type.GetEvent(eventName, BindingFlagsMethod);
+                    if (realEvent != null && IsMemberObsolete(realEvent))
+                    {
+                        continue;
+                    }
                 }
                 else
                 {
@@ -415,9 +430,15 @@ public static class GeneratorHelp
     public static bool MethodIsOverloaded(Type type, MethodInfo methodInfo)
     {
         string methodName = methodInfo.Name;
-        bool ret = HasOverloadedMethod(type, methodName, BindingFlags.Public
-                                                         | BindingFlags.Static
-                                                         | BindingFlags.Instance);
+        var flags = BindingFlags.Public
+                    | BindingFlags.Static
+                    | BindingFlags.Instance;
+        // 这个修改有点神奇，先不管
+//        if (type.Module.Name.Contains("Assembly-CSharp-firstpass"))
+//        {
+//            flags |= BindingFlags.NonPublic;
+//        }
+        bool ret = HasOverloadedMethod(type, methodName, flags);
         if (!ret)
         {
             ret = HasOverloadedMethod(type, methodName, BindingFlags.Public

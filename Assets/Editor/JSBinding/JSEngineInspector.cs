@@ -1,4 +1,9 @@
-﻿using UnityEngine;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+using LITJson;
+using UnityEngine;
 using UnityEditor;
 
 [CustomEditor(typeof(JSEngine))]
@@ -34,7 +39,11 @@ public class JSEngineInspector : Editor
             {
                 jsEngine.DumpJsComMapInfo();
             }
+            if (GUILayout.Button("Dump Ref Dic"))
+            {
+                JSEngine.GenerateJs2CsRef();
 
+            }
             if (jsEngine.showStatistics)
             {
                 jsEngine.scrollPos = jsEngine.DrawStatistics(jsEngine.scrollPos, 400f);
@@ -44,4 +53,5 @@ public class JSEngineInspector : Editor
 
         serializedObject.ApplyModifiedProperties();
     }
+
 }

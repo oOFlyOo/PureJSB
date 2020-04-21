@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
 using cg;
@@ -353,9 +354,14 @@ public class JSDataExchangeEditor
         if (delType.ContainsGenericParameters)
         {
             var arg = new args();
+//            var hashSetNames = new HashSet<string>();
             foreach (var t in delType.GetGenericArguments())
             {
-                arg.Add(t.Name);
+                // 泛型参数，重复类型的一个即可了，可能处理这里还不够
+//                if (hashSetNames.Add(t.Name))
+                {
+                    arg.Add(t.Name);
+                }
             }
             stringTOfMethod = arg.Format(args.ArgsFormat.GenericT);
         }

@@ -9,12 +9,13 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using cg;
+using AssetPipeline;
+using LITJson;
 using SharpKit.JavaScript;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
 using Object = UnityEngine.Object;
-using LITJson;
 
 public class JsExternalTools
 {
@@ -29,11 +30,21 @@ public class JsExternalTools
     {
         var jsCodeFiles = Directory.GetFiles(JSPathSettings.jsDir, "*" + JSPathSettings.jsExtension,
             SearchOption.AllDirectories);
-     
+        var protoJsFiles =
+            Directory.GetFiles(Path.Combine(Application.dataPath, "Scripts/GameProtocol/app-clientservice/javascript"),
+                "*" + JSPathSettings.jsExtension, SearchOption.AllDirectories);
         var jsFiles = new List<string>();
         for (int i = 0; i < jsCodeFiles.Length; i++)
         {
             string file = jsCodeFiles[i];
+            if (FilterJsFile(file))
+                continue;
+            jsFiles.Add(file);
+        }
+
+        for (int i = 0; i < protoJsFiles.Length; i++)
+        {
+            string file = protoJsFiles[i];
             if (FilterJsFile(file))
                 continue;
             jsFiles.Add(file);
@@ -53,24 +64,33 @@ public class JsExternalTools
     [MenuItem("JSB/Minify All JsCode", false, 132)]
     public static void MinifyJsCode()
     {
+        MinifyJsCode(true);
+    }
+
+    public static void MinifyJsCode(bool displayDialog)
+    {
         var jsFiles = GetNeedMinifyJsFiles();
 
-        if (!EditorUtility.DisplayDialog("TIP",
-            "Total: " + jsFiles.Count + "个Js文件进行Minify",
-            "OK",
-            "Cancel"))
+        if (displayDialog)
         {
-            Debug.Log("Operation canceled.");
-            return;
+            if (!EditorUtility.DisplayDialog("TIP",
+                    "Total: " + jsFiles.Count + "个Js文件进行Minify",
+                    "OK",
+                    "Cancel"))
+            {
+                Debug.Log("Operation canceled.");
+                return;
+            }
         }
+
 
         string workingDir = Application.dataPath.Replace("/Assets", "");
 #if UNITY_EDITOR_WIN
         string exePath = Path.Combine(workingDir, "JSBExternalTools/closure-compiler/minifyJs.bat");
         string arguments = String.Join(" ", jsFiles.ToArray());
 #else
-		string exePath = "/bin/bash";
-		string arguments = Path.Combine(workingDir, "JSBExternalTools/closure-compiler/minifyJs.sh") +" "+string.Join(" ", jsFiles.ToArray());
+        string exePath = "/bin/bash";
+        string arguments = Path.Combine(workingDir, "JSBExternalTools/closure-compiler/minifyJs.sh") + " " + string.Join(" ", jsFiles.ToArray());
 #endif
         //这里要使用UseShellExecute的方式执行批处理脚本,重定向输出信息的话,会导致Unity卡死
         //暂不知道原因可能是Java程序没执行完毕
@@ -105,7 +125,8 @@ public class JsExternalTools
         process.Close();
         if (exitCode != 0)
         {
-            EditorUtility.DisplayDialog("JsMinify", "Minify failed. exit code = " + exitCode, "OK");
+            if (displayDialog)
+                EditorUtility.DisplayDialog("JsMinify", "Minify failed. exit code = " + exitCode, "OK");
 #if !USE_SHELL
             if (!string.IsNullOrEmpty(errorLog))
                 Debug.LogError(errorLog);
@@ -113,17 +134,18 @@ public class JsExternalTools
         }
         else
         {
-            EditorUtility.DisplayDialog("JsMinify", "JsCode Minify success.", "OK");
+            if (displayDialog)
+                EditorUtility.DisplayDialog("JsMinify", "JsCode Minify success.", "OK");
         }
 
         //输出Minify日志
 #if !USE_SHELL
-		string logFile = GetTempFileNameFullPath("minify_log.txt");
+        string logFile = GetTempFileNameFullPath("minify_log.txt");
         File.WriteAllText(logFile, outputLog);
         Debug.LogError(outputLog);
 
         string relPath = logFile.Replace("\\", "/").Substring(logFile.IndexOf("Assets/"));
-        var context = Resources.LoadAssetAtPath<Object>(relPath);
+        var context = AssetDatabase.LoadAssetAtPath<Object>(relPath);
         Debug.Log("生成了文件 " + relPath + "，请检查（点击此条可定位文件）", context);
 #endif
         AssetDatabase.Refresh();
@@ -135,9 +157,9 @@ public class JsExternalTools
         var jsFiles = GetNeedMinifyJsFiles();
 
         if (!EditorUtility.DisplayDialog("TIP",
-            "Total: " + jsFiles.Count + "个Js文件Minify文件删除",
-            "OK",
-            "Cancel"))
+                "Total: " + jsFiles.Count + "个Js文件Minify文件删除",
+                "OK",
+                "Cancel"))
         {
             Debug.Log("Operation canceled.");
             return;
@@ -146,7 +168,8 @@ public class JsExternalTools
         for (int i = 0; i < jsFiles.Count; i++)
         {
             string minifyFile = Path.ChangeExtension(jsFiles[i], ".min" + JSPathSettings.jsExtension);
-            JSBFileHelper.DeleteFile(minifyFile);
+            //            FileHelper.DeleteFile(minifyFile);
+            FileUtil.DeleteFileOrDirectory(minifyFile);
         }
 
         AssetDatabase.Refresh();
@@ -156,15 +179,20 @@ public class JsExternalTools
 
     #region JsCompiler
 
-    private const string JsCompilerPath = "JSBExternalTools/JsCompiler/skc5.exe";
-    private const string ouputDllPath = "Temp/obj/Debug/SharpKitProj.dll";
+    public const string JsCompilerPath = "JSBExternalTools/JsCompiler/skc5.exe";
+    public const string ouputDllPath = "Temp/obj/Debug/SharpKitProj.dll";
+    /// <summary>
+    /// 不明作用，暂时保留
+    /// </summary>
     private static bool _rebuild;
+    private static bool _quickRebuild;
     private static bool _editorDefine;
+    private static bool cmd = false;
 
     private static Dictionary<string, List<string>> typesImpByJs;
 
     private static bool CompileJsCode(string allInvokeOutputPath, string allInvokeWithLocationOutputPath,
-        string YieldReturnTypeOutputPath)
+                                      string YieldReturnTypeOutputPath, bool displayDialog)
     {
         string workingDir = Application.dataPath.Replace("/Assets", "");
 
@@ -173,71 +201,16 @@ public class JsExternalTools
         // working dir
         args.AddFormat("/dir:\"{0}\"", workingDir);
 
-        // define		
-        string define = "TRACE";
-
-#if UNITY_ANDROID
-        define += ";UNITY_ANDROID";
-#endif
-
-#if UNITY_IPHONE
-        define += ";UNITY_IPHONE";
-#endif
-
-#if UNITY_4_6
-        define += ";UNITY_4_6";
-#endif
-
-#if UNITY_4_7
-        define += ";UNITY_4_7";
-#endif
-
-#if UNITY_4_8
-        define += ";UNITY_4_8";
-#endif
-
-#if UNITY_5_0
-        define += ";UNITY_5_0";
-#endif
-
-#if UNITY_5_1
-        define += ";UNITY_5_1";
-#endif
-
-#if UNITY_5_2
-        define += ";UNITY_5_2";
-#endif
-
-#if UNITY_5_3
-        define += ";UNITY_5_3";
-#endif
-        //在这里可以加入自定义宏
-#if UNITY_ANDROID
-        string scriptDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android);
-#elif UNITY_IPHONE
-        string scriptDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.iPhone);
-#else
-        string scriptDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Standalone);
-#endif
-        define += ";" + scriptDefines;
-        if (!scriptDefines.Contains("ENABLE_JSB"))
-            define += ";ENABLE_JSB";
-
-        if (_editorDefine)
-            define += ";UNITY_EDITOR";
-
+        var define = GetDefines();
         args.AddFormat("/define:{0}", define);
 
         if (_rebuild)
             args.Add("/rebuild");
 
         // references
-        var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-
-        for (int i = 0; i < assemblies.Length; i++)
+        foreach (var reference in GetReferences())
         {
-            var asm = assemblies[i];
-            args.AddFormat("/reference:\"{0}\"", asm.Location);
+            args.AddFormat("/reference:\"{0}\"", reference);
         }
 
         // out, target, target framework version
@@ -252,17 +225,9 @@ public class JsExternalTools
 #endif
 
         // source files
-        var sources = Directory.GetFiles(Application.dataPath, "*.cs", SearchOption.AllDirectories);
-        for (int i = 0; i < sources.Length; i++)
+        foreach (var csFile in GetCsFiles())
         {
-            //Ignore Editor Folder *.cs files
-            string filePath = sources[i].Replace('\\', '/');
-            if (filePath.Contains("/WebPlayerTemplates"))
-                continue;
-            if (filePath.Contains("/Editor") && !filePath.EndsWith("JsTypeInfo.cs"))
-                continue;
-
-            args.Add("\"" + filePath.Replace(workingDir, ".") + "\"");
+            args.Add("\"" + csFile.Replace(workingDir, ".") + "\"");
         }
 
         // 把参数写到文件中，然后把这个文件路径做为参数传递给 skc5.exe
@@ -309,21 +274,186 @@ public class JsExternalTools
         process.Close();
         if (exitCode != 0)
         {
-            EditorUtility.DisplayDialog("SharpKitCompiler", "Compile failed. exit code = " + exitCode, "OK");
+            if (displayDialog)
+            {
+                EditorUtility.DisplayDialog("SharpKitCompiler", "Compile failed. exit code = " + exitCode, "OK");
+            }
 #if !USE_SHELL
-			Debug.LogError(outputLog);
+            Debug.LogError(outputLog + "just Log, 非Error (可以忽略)");
             if (!string.IsNullOrEmpty(errorLog))
                 Debug.LogError(errorLog);
+
+            File.WriteAllText("skcErr.txt",outputLog+"\n"+errorLog);
 #endif
+
             return false;
         }
 
 #if !USE_SHELL
 		Debug.LogError(outputLog);
 #endif
-        EditorUtility.DisplayDialog("SharpKitCompiler", "Compile success.", "OK");
+        if (displayDialog)
+        {
+            EditorUtility.DisplayDialog("SharpKitCompiler", "Compile success.", "OK");
+        }
         return true;
     }
+
+    [MenuItem("JSB/Check Compile", false, 142)]
+    private static void CheckCompile()
+    {
+        _editorDefine = false;
+        var dllPath = Path.GetDirectoryName(Application.dataPath) + "/Temp/CheckCompile.dll";
+        var msg = EditorUtility.CompileCSharp(GetCsFiles(true).ToArray(), GetReferences(false).ToArray(), GetDefines().Split(';'),
+            dllPath);
+        if (msg != null)
+        {
+            var sb = new StringBuilder();
+            foreach (var s in msg)
+            {
+                if (s.Contains(" error ") || s.Contains("Exception"))
+                {
+                    sb.AppendLine(s);
+                }
+            }
+            if (sb.Length > 1)
+            {
+                Debug.LogError(sb);
+            }
+            else
+            {
+                Debug.LogError("Check Success!");
+            }
+        }
+    }
+
+    public static List<string> GetReferences(bool sharpKitMode = true)
+    {
+        var references = new HashSet<string>();
+        if (sharpKitMode)
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var path = assembly.Location;
+                if (!path.Contains("-Editor"))
+                {
+                    references.Add(path);
+                }
+            }
+        }
+        else
+        {
+            foreach (var assemblyName in AppDomain.CurrentDomain.Load("Assembly-CSharp").GetReferencedAssemblies())
+            {
+                var path = AppDomain.CurrentDomain.Load(assemblyName).Location;
+                references.Add(path);
+            }
+            foreach (var assemblyName in AppDomain.CurrentDomain.Load("Assembly-CSharp-firstpass").GetReferencedAssemblies())
+            {
+                var path = AppDomain.CurrentDomain.Load(assemblyName).Location;
+                references.Add(path);
+            }
+            references.RemoveWhere(s => s.Contains("mono"));
+        }
+
+        return references.ToList();
+    }
+
+    public static List<string> GetCsFiles(bool checkCompile = false)
+    {
+        var files = new List<string>();
+        var sources = Directory.GetFiles(Application.dataPath, "*.cs", SearchOption.AllDirectories);
+        for (int i = 0; i < sources.Length; i++)
+        {
+            //Ignore Editor Folder *.cs files
+            string filePath = sources[i].Replace('\\', '/');
+            if (filePath.Contains("/WebPlayerTemplates") || filePath.Contains("/Plugins/") || filePath.Contains("/Standard Assets/"))
+                continue;
+            if (filePath.Contains("/Editor/") && (!filePath.EndsWith("JsTypeInfo.cs") || checkCompile))
+                continue;
+
+            files.Add(filePath);
+        }
+
+        return files;
+    }
+
+    public static string GetDefines()
+    {
+        // define		
+        var define = "TRACE";
+
+#if UNITY_ANDROID
+        define += ";UNITY_ANDROID";
+#endif
+
+        // Deprecated
+#if UNITY_IPHONE
+        define += ";UNITY_IPHONE";
+#endif
+
+#if UNITY_IOS
+        define += ";UNITY_IOS";
+#endif
+
+#if UNITY_STANDALONE
+        define += ";UNITY_STANDALONE";
+#endif
+
+#if UNITY_4_6
+        define += ";UNITY_4_6";
+#endif
+
+#if UNITY_4_7
+        define += ";UNITY_4_7";
+#endif
+
+#if UNITY_4_8
+        define += ";UNITY_4_8";
+#endif
+
+#if UNITY_5
+        define += ";UNITY_5";
+#endif
+
+#if UNITY_5_0
+        define += ";UNITY_5_0";
+#endif
+
+#if UNITY_5_1
+        define += ";UNITY_5_1";
+#endif
+
+#if UNITY_5_2
+        define += ";UNITY_5_2";
+#endif
+
+#if UNITY_5_3
+        define += ";UNITY_5_3";
+#endif
+
+#if UNITY_5_4
+        define += ";UNITY_5_4";
+#endif
+
+        //在这里可以加入自定义宏
+#if UNITY_ANDROID
+        string scriptDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Android);
+#elif UNITY_IPHONE
+        string scriptDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.iOS);
+#else
+        string scriptDefines = PlayerSettings.GetScriptingDefineSymbolsForGroup(BuildTargetGroup.Standalone);
+#endif
+        define += ";" + scriptDefines;
+        if (!scriptDefines.Contains("ENABLE_JSB"))
+            define += ";ENABLE_JSB";
+
+        if (_editorDefine)
+            define += ";UNITY_EDITOR";
+
+        return define;
+    }
+
 
     // 加载文本文件
     // 内容是所有 Logic 调用 Framework 的代码信息
@@ -703,7 +833,7 @@ public class JsExternalTools
             File.WriteAllText(fullpath, sbError.ToString());
 
             string relPath = fullpath.Replace("\\", "/").Substring(fullpath.IndexOf("Assets/"));
-            var context = Resources.LoadAssetAtPath<Object>(relPath);
+            var context = AssetDatabase.LoadAssetAtPath<Object>(relPath);
             Debug.LogError("Check invocation error result: (" + errCount + " errors) （点击此条可定位文件）", context);
             Debug.LogError(sbError);
         }
@@ -761,28 +891,54 @@ public class JsExternalTools
             Debug.LogError(sb.ToString());
     }
 
-    [MenuItem("JSB/Build Mobile JsCode", false, 130)]
+    /// <summary>
+    /// 强制正式环境
+    /// </summary>
+    /// <returns></returns>
+    private static bool IsRealEnvironment()
+    {
+        return EditorUserBuildSettings.activeBuildTarget == BuildTarget.iOS;
+    }
+
+    private static bool IsRebuild()
+    {
+        // 防止iOS遗漏，反正也挺快的
+        if (IsRealEnvironment())
+        {
+            return true;
+        }
+
+        return EditorUtility.DisplayDialog("编译JS", "是否完整编译？增量编译更快，但可能会出问题！", "完整",
+            " 增量");
+    }
+
+    [MenuItem("JSB/Build Mobile JsCode", false, 141)]
     public static void BuildJsCode()
+    {
+        var rebuild = IsRebuild();
+        BuildJsCode(true, rebuild);
+    }
+
+    public static void BuildJsCode(bool displayDialog, bool rebuild)
     {
         _rebuild = true;
         _editorDefine = false;
-        CompileCsToJs();
+        CompileCsToJs(displayDialog, rebuild);
     }
 
-    //[MenuItem("JSB/Rebuild Mobile JsCode", false, 130)]
-    //public static void RebuildJsCode()
-    //{
-    //    _rebuild = true;
-    //    _editorDefine = false;
-    //    CompileCsToJs();
-    //}
 
     [MenuItem("JSB/Build Editor JsCode", false, 131)]
     public static void BuildEditorJsCode()
     {
+        var rebuild = IsRebuild();
+        BuildEditorJsCode(true, rebuild);
+    }
+
+    public static void BuildEditorJsCode(bool displayDialog, bool rebuild)
+    {
         _rebuild = true;
         _editorDefine = true;
-        CompileCsToJs();
+        CompileCsToJs(displayDialog, rebuild);
     }
 
     //[MenuItem("JSB/Rebuild Editor JsCode", false, 131)]
@@ -793,7 +949,73 @@ public class JsExternalTools
     //    CompileCsToJs();
     //}
 
-    public static void CompileCsToJs()
+    [MenuItem("JSB/One Key Build All/One Key Build for Editor", false, 151)]
+    public static void OneKeyBuildAllEditor()
+    {
+        var rebuild = IsRebuild();
+
+        OneKeyBuildAll(false, false, rebuild);
+    }
+
+    [MenuItem("JSB/One Key Build All/One Key Build for Mobile", false, 152)]
+    public static void OneKeyBuildAllMobile()
+    {
+        var rebuild = IsRebuild();
+        OneKeyBuildAll(true, false, rebuild);
+    }
+
+    [MenuItem("JSB/One Key Build All/One Key Build for Mobile Except Framework", false, 153)]
+    public static void OneKeyBuildMobileAndMinify()
+    {
+        var rebuild = IsRebuild();
+        var displayDialog = false;
+
+        ScriptRecompileHelper.WaitIfCompiling<bool>(GenerateJsTypeInfo, displayDialog);
+        ScriptRecompileHelper.WaitIfCompiling(GenerateJsInfoConfig);
+        ScriptRecompileHelper.WaitIfCompiling<bool, bool>(BuildJsCode, displayDialog, rebuild);
+        if (IsRealEnvironment())
+        {
+            ScriptRecompileHelper.WaitIfCompiling<bool>(MinifyJsCode, displayDialog);
+        }
+    }
+
+    public static void OneKeyBuildAll(bool pForMobile, bool displayDialog, bool rebuild)
+    {
+        ScriptRecompileHelper.CheckBeforeUsing();
+        ScriptRecompileHelper.WaitIfCompiling(CodeManagerTool.ChangeToJSB);
+        ScriptRecompileHelper.WaitIfCompiling<bool>(CSGenerator.GenerateJSCSBindings, displayDialog);
+        ScriptRecompileHelper.WaitIfCompiling<bool>(GenerateJsTypeInfo, displayDialog);
+        ScriptRecompileHelper.WaitIfCompiling(GenerateJsInfoConfig);
+        if (pForMobile || IsRealEnvironment())
+        {
+            ScriptRecompileHelper.WaitIfCompiling<bool, bool>(BuildJsCode, displayDialog, rebuild);
+        }
+        else
+        {
+            ScriptRecompileHelper.WaitIfCompiling<bool, bool>(BuildEditorJsCode, displayDialog, rebuild);
+        }
+
+        if (IsRealEnvironment())
+        {
+            ScriptRecompileHelper.WaitIfCompiling<bool>(MinifyJsCode, displayDialog);
+        }
+
+        if (!displayDialog)
+        {
+            ScriptRecompileHelper.WaitIfCompiling(() => { EditorHelper.DisplayResultDialog(); });
+        }
+    }
+
+    public static bool CheckTempJSBCodeRoot()
+    {
+        if (Directory.Exists(CodeManagerTool.TempJSBCodeRoot))
+        {
+            return EditorUtility.DisplayDialog("TIP", "检测到TempJSBCodeRoot目录存在，是否还原业务代码？", "OK", "CANCEL");
+        }
+        return false;
+    }
+
+    public static void CompileCsToJs(bool displayDialog, bool rebuild)
     {
         // 这个用于查看
         string allInvokeOutputPath = GetTempFileNameFullPath("AllInvocations.txt");
@@ -803,21 +1025,27 @@ public class JsExternalTools
         string YieldReturnTypeOutputPath = GetTempFileNameFullPath("YieldReturnTypes.txt");
 
         // 编译
-        if (!CompileJsCode(allInvokeOutputPath, allInvokeWithLocationOutputPath, YieldReturnTypeOutputPath))
+        //        if (!CompileJsCode(allInvokeOutputPath, allInvokeWithLocationOutputPath, YieldReturnTypeOutputPath, displayDialog))
+        //        {
+        //            return;
+        //        }
+        if (!JsQuikBuild.QuickCompileJsCode(rebuild))
         {
             return;
         }
 
-//        // 查错
-//        CheckError_Invocation(allInvokeWithLocationOutputPath);
-//        CheckError_Inheritance();
 
+        // 查错
+        //CheckError_Invocation(allInvokeWithLocationOutputPath);
+        //CheckError_Inheritance();
+
+        AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
 
         // 提示生成 yield 结果
         string relPath =
             YieldReturnTypeOutputPath.Replace("\\", "/").Substring(YieldReturnTypeOutputPath.IndexOf("Assets/"));
-        var context = Resources.LoadAssetAtPath<Object>(relPath);
+        var context = AssetDatabase.LoadAssetAtPath<Object>(relPath);
         Debug.Log("生成了文件 " + relPath + "，请检查（点击此条可定位文件）", context);
     }
 
@@ -856,7 +1084,7 @@ public class JsExternalTools
         }
     }
 
-    public const string _JsTypeInfoFileTemplate = @"
+    public const string JsTypeInfoFileTemplate = @"
 //------------------------------------------------------------------------------
 // <auto-generated>
 // This code was generated by CSGenerator.
@@ -864,26 +1092,26 @@ public class JsExternalTools
 //------------------------------------------------------------------------------
 using SharpKit.JavaScript;
 
-[assembly: JsExport(Minify = false, DefaultFilename = ""{JsDir}/GameLogicCode.bytes"")]
+[assembly: JsExport(Minify = false, DefaultFilename = ""Assets/JavaScript/GameLogicCode.bytes"")]
 
 #region JsType
 {0}
 #endregion";
-	public static string JsTypeInfoFileTemplate{
-		get{
-			return _JsTypeInfoFileTemplate.Replace ("{JsDir}",JSPathSettings.jsDir);
-		}
-	}
 
     public const string JsTypeFormat = @"[assembly: JsType(TargetTypeName = ""{0}"", Mode = JsMode.Clr)]";
 
     public static readonly string JsTypeInfoFile = Application.dataPath +
                                                    "/Editor/JSBinding/JsTypeInfo.cs";
 
-    private const string JsTypeGeneratorPath = "JSBExternalTools/JsTypeGenerator/JsTypeGenerator.exe";
+    public const string JsTypeGeneratorPath = "JSBExternalTools/JsTypeGenerator/JsTypeGenerator.exe";
 
     [MenuItem("JSB/Add SharpKit JsType Attribute for all Structs and Classes", false, 51)]
     public static void GenerateJsTypeInfo()
+    {
+        GenerateJsTypeInfo(true);
+    }
+
+    public static void GenerateJsTypeInfo(bool displayDialog)
     {
         var fileInfoSb = new StringBuilder();
         string workingDir = Application.dataPath.Replace("/Assets", "");
@@ -895,51 +1123,12 @@ using SharpKit.JavaScript;
         args.AddFormat("/template:\"{0}\"", JsTypeInfoFileTemplate);
         args.AddFormat("/format:\"{0}\"", JsTypeFormat);
 
-        var csFiles = Directory.GetFiles(Application.dataPath, "*.cs", SearchOption.AllDirectories);
-        int exportCount = 0;
-        // filter files
-        for (int i = 0; i < csFiles.Length; i++)
+        var exportList = GetExportFiles();
+        var exportCount = exportList.Count;
+        foreach (var filePath in exportList)
         {
-            string file = csFiles[i];
-            string filePath = file.Replace('\\', '/');
-            bool export = true;
-
-            //忽略Editor目录下的脚本
-            if (filePath.Contains("Editor/"))
-            {
-                continue;
-            }
-
-            //检查是否在忽略文件目录列表中
-			for (int j = 0; j < JSBCodeGenSettings.PathsNotToJavaScript.Length; j++)
-            {
-				string dir = JSBCodeGenSettings.PathsNotToJavaScript[j];
-                if (filePath.Contains(dir))
-                {
-                    export = false;
-                    break;
-                }
-            }
-
-            //检查是否在指定文件目录列表中
-			if (!export && JSBCodeGenSettings.PathsToJavaScript != null)
-            {
-				for (int k = 0; k < JSBCodeGenSettings.PathsToJavaScript.Length; k++)
-                {
-					string dir = JSBCodeGenSettings.PathsToJavaScript[k];
-                    if (filePath.Contains(dir))
-                    {
-                        export = true;
-                        break;
-                    }
-                }
-            }
-            if (export)
-            {
-                exportCount++;
-                fileInfoSb.AppendLine(filePath.Replace(Application.dataPath, ""));
-                args.Add("\"" + filePath.Replace(workingDir, ".") + "\"");
-            }
+            fileInfoSb.AppendLine(filePath.Replace(Application.dataPath, ""));
+            args.Add("\"" + filePath.Replace(workingDir, ".") + "\"");
         }
 
         // 把参数写到文件中，然后把这个文件路径做为参数传递给 skc5.exe
@@ -951,13 +1140,17 @@ using SharpKit.JavaScript;
         File.WriteAllText(addTypeInfoFile, fileInfoSb.ToString());
         AssetDatabase.Refresh();
 
-        if (!EditorUtility.DisplayDialog("TIP",
-            "Total: " + exportCount + "file prepare to Add [JsType]",
-            "OK",
-            "Cancel"))
+        if (displayDialog)
         {
-            Debug.Log("Operation canceled.");
-            return;
+            if (!EditorUtility.DisplayDialog("TIP",
+                    "Total: " + exportCount + "file prepare to Add [JsType]",
+                    "OK",
+                    "Cancel"))
+            {
+                Debug.Log("Operation canceled.");
+                return;
+            }
+
         }
 
 #if UNITY_EDITOR_WIN
@@ -965,7 +1158,7 @@ using SharpKit.JavaScript;
         string arguments = String.Format("/paramFile:\"{0}\"", argFile);
 #else
         string exePath = "/usr/local/bin/mono";
-        string arguments = Path.Combine(workingDir, JsTypeGeneratorPath) + string.Format(" /paramFile:\"{0}\"",argFile);
+        string arguments = Path.Combine(workingDir, JsTypeGeneratorPath) + string.Format(" /paramFile:\"{0}\"", argFile);
 #endif
         var processInfo = new ProcessStartInfo
         {
@@ -988,33 +1181,92 @@ using SharpKit.JavaScript;
         process.Close();
         if (exitCode != 0)
         {
+
             EditorUtility.DisplayDialog("JsTypeGenerator", "Generate failed. exit code = " + exitCode, "OK");
             if (!String.IsNullOrEmpty(errorLog))
                 Debug.LogError(errorLog);
-
-            return;
+            throw new SystemException(errorLog);
         }
 
         //每次生成JsTypeInfo，清空一下JsTypeNameSet
         _jsTypeNameSet = null;
-        EditorUtility.DisplayDialog("JsTypeGenerator", "GenerateJsTypeInfo success.", "OK");
+        if (displayDialog)
+            EditorUtility.DisplayDialog("JsTypeGenerator", "GenerateJsTypeInfo success.", "OK");
+
+        // 刷新前改一下文件格式，减少编译时间
+        EditorHelper.SetFileFormatToUTF8_BOM(JsTypeInfoFile);
+
+        AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
+    }
+
+    public static List<string> GetExportFiles()
+    {
+        var csFiles = Directory.GetFiles(Application.dataPath, "*.cs", SearchOption.AllDirectories);
+        var list = new List<string>();
+        // filter files
+        for (int i = 0; i < csFiles.Length; i++)
+        {
+            string file = csFiles[i];
+            string filePath = file.Replace('\\', '/');
+            bool export = true;
+
+            //忽略Editor目录下的脚本
+            if (filePath.Contains("/Editor/"))
+            {
+                continue;
+            }
+
+            //检查是否在忽略文件目录列表中
+            for (int j = 0; j < JSBCodeGenSettings.PathsNotToJavaScript.Length; j++)
+            {
+                string dir = JSBCodeGenSettings.PathsNotToJavaScript[j];
+                if (filePath.Contains(dir))
+                {
+                    export = false;
+                    break;
+                }
+            }
+
+            //检查是否在指定文件目录列表中
+            if (!export && JSBCodeGenSettings.PathsToJavaScript != null)
+            {
+                for (int k = 0; k < JSBCodeGenSettings.PathsToJavaScript.Length; k++)
+                {
+                    string dir = JSBCodeGenSettings.PathsToJavaScript[k];
+                    if (filePath.Contains(dir))
+                    {
+                        export = true;
+                        break;
+                    }
+                }
+            }
+            if (export)
+            {
+                list.Add(filePath);
+            }
+        }
+
+        return list;
     }
 
     [MenuItem("JSB/Delete SharpKit JsType Attribute for all Structs and Classes", false, 52)]
     public static void RemoveJsTypeAttribute()
     {
         if (!EditorUtility.DisplayDialog("TIP",
-            "Will clean up JsTypeInfo.cs file",
-            "OK",
-            "Cancel"))
+                "Will clean up JsTypeInfo.cs file",
+                "OK",
+                "Cancel"))
         {
             Debug.Log("Operation canceled.");
             return;
         }
 
-        File.WriteAllText(JsTypeInfoFile, String.Format(JsTypeInfoFileTemplate, ""));
+
+        File.WriteAllText(JsTypeInfoFile, String.Format(JsTypeInfoFileTemplate, ""), new UTF8Encoding(true));
+
         EditorUtility.DisplayDialog("Tip", "RemoveJsTypeAttribute Success!", "OK");
+
         AssetDatabase.Refresh();
     }
 
@@ -1027,14 +1279,15 @@ using SharpKit.JavaScript;
     {
         GenerateJsTypeInfoConfig();
         GenerateMono2JsComConfig();
+        AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
     }
 
     private static void GenerateJsTypeInfoConfig()
     {
         string filePath = JSPathSettings.JsTypeInfoConfig;
-        File.WriteAllText(filePath, JsonMapper.ToJson(JsTypeNameSet.ToArray()));
-        Debug.Log(string.Format("JsTypeInfoConfig:{0}\nOK. File: {1}", JsTypeNameSet.Count, filePath));
+        File.WriteAllText(filePath, MiniJSON.jsonEncode(JsTypeNameSet.ToArray()));
+        Debug.Log(String.Format("JsTypeInfoConfig:{0}\nOK. File: {1}", JsTypeNameSet.Count, filePath));
     }
 
     private static void GenerateMono2JsComConfig()
@@ -1063,8 +1316,8 @@ using SharpKit.JavaScript;
         }
 
         string filePath = JSPathSettings.Mono2JsComConfig;
-		File.WriteAllText(filePath, JsonMapper.ToJson(mono2JsCom));
-        Debug.Log(string.Format("Mono2JsCom:{0}\nOK. File: {1}", mono2JsCom.Count, filePath));
+        File.WriteAllText(filePath, MiniJSON.jsonEncode(mono2JsCom));
+        Debug.Log(String.Format("Mono2JsCom:{0}\nOK. File: {1}", mono2JsCom.Count, filePath));
     }
 
     /// <summary>
@@ -1086,6 +1339,7 @@ using SharpKit.JavaScript;
     #endregion
 
     #region Helper Func
+
     public static string GetTempFileNameFullPath(string shortPath)
     {
         Directory.CreateDirectory(Application.dataPath + "/Temp/");

@@ -33,20 +33,22 @@ public class CSGenerateRegister
     private static readonly StringBuilder _paramTypeInfoBuilder = new StringBuilder();
 
     public static HashSet<Type> ExportTypeSet { get; private set; }
+    public static Type[] OtherExportTypeArray { get; private set; }
     public static HashSet<Type> ExportEnumSet { get; private set; }
+
+    private static HashSet<string> ExistingCsFiles = new HashSet<string>();
+    private static HashSet<string> GenerateCsFiles = new HashSet<string>();
 
     public static void OnBegin()
     {
         GeneratorHelp.ClearTypeInfo();
         _paramTypeInfoBuilder.Length = 0;
 
+        ExistingCsFiles.Clear();
+        GenerateCsFiles.Clear();
         if (Directory.Exists(JSPathSettings.csGeneratedDir))
         {
-            var files = Directory.GetFiles(JSPathSettings.csGeneratedDir);
-            for (int i = 0; i < files.Length; i++)
-            {
-                File.Delete(files[i]);
-            }
+            ExistingCsFiles.UnionWith(AssetDatabase.FindAssets("t:Script", new []{FileUtil.GetProjectRelativePath(JSPathSettings.csGeneratedDir)}));
         }
         else
         {
@@ -56,9 +58,17 @@ public class CSGenerateRegister
 
     public static void OnEnd()
     {
+        ExistingCsFiles.ExceptWith(GenerateCsFiles);
+        foreach (var existingCsFile in ExistingCsFiles)
+        {
+            FileUtil.DeleteFileOrDirectory(existingCsFile);
+        }
+        ExistingCsFiles.Clear();
+        GenerateCsFiles.Clear();
+
         if (_paramTypeInfoBuilder.Length > 0)
         {
-            Debug.LogError("Warning! Has invalidated params\n" + _paramTypeInfoBuilder);
+            Debug.LogError("Warning（just warning Log  理论上可以忽略）! Has invalidated params\n" + _paramTypeInfoBuilder);
         }
     }
 
@@ -476,6 +486,8 @@ public class CSGenerateRegister
         else if (methodName == "op_GreaterThanOrEqual")
             strCall = paramHandlers[0].argName + " >= " + paramHandlers[1].argName;
         else if (methodName == "op_Implicit")
+            strCall = "(" + JSNameMgr.GetTypeFullName(returnType) + ")" + paramHandlers[0].argName;
+        else if (methodName == "op_Explicit")
             strCall = "(" + JSNameMgr.GetTypeFullName(returnType) + ")" + paramHandlers[0].argName;
         else
             Debug.LogError("Unknown special name: " + methodName);
@@ -947,11 +959,12 @@ static bool {0}(JSVCall vc, int argc)
                     JSNameMgr.HandleFunctionName(type.Name + "_" + type.Name + (olIndex > 0 ? olIndex.ToString() : "") +
                                                  (cons.IsStatic ? "_S" : ""));
 
-                sb.AppendFormat(fmt, functionName,
-                    BuildNormalFunctionCall(type, methodTag, paramS, cons.Name, cons.IsStatic, null, true, 0));
-
-                ccbn.constructors.Add(functionName);
-                //ccbn.constructorsCSParam.Add(GenListCSParam2(paramS).ToString());
+                if (JSBCodeGenSettings.IsSupportByDotNet2SubSet(functionName))
+                {
+                    sb.AppendFormat(fmt, functionName,
+                        BuildNormalFunctionCall(type, methodTag, paramS, cons.Name, cons.IsStatic, null, true, 0));
+                    ccbn.constructors.Add(functionName);
+                }
             }
         }
         return sb;
@@ -1202,6 +1215,11 @@ public static void __Register()
             sbA.AppendFormat("        {0}.__Register();\n",
                 JSNameMgr.GetTypeFileName(type));
         }
+        foreach (var type in OtherExportTypeArray)
+        {
+            sbA.AppendFormat("        {0}.__Register();\n",
+                JSNameMgr.GetTypeFileName(type));
+        }
         var sb = new StringBuilder();
         sb.AppendFormat(REGISTER_HEADER, sbA);
         HandleStringFormat(sb);
@@ -1287,14 +1305,16 @@ public class {0}
         string fileName = JSPathSettings.csGeneratedDir + "/" +
                           JSNameMgr.GetTypeFileName(type) +
                           ".cs";
+        GenerateCsFiles.Add(FileUtil.GetProjectRelativePath(fileName));
         var writer2 = OpenFile(fileName, false);
         writer2.Write(sbFile.ToString());
         writer2.Close();
     }
 
-    private static StreamWriter OpenFile(string fileName, bool bAppend = false)
+    private static StreamWriter OpenFile(string fileName, bool bAppend = false, bool withBom = true)
     {
-        return new StreamWriter(fileName, bAppend, Encoding.UTF8);
+        var  utf8WithBom = new UTF8Encoding(withBom);
+        return new StreamWriter(fileName, bAppend, utf8WithBom);
     }
 
     private static void HandleStringFormat(StringBuilder sb)
@@ -1472,8 +1492,11 @@ public class {0}
 
         if (logBuilder.Length > 0)
             Debug.LogError(logBuilder);
+
         exportTypeSet.UnionWith(missingTypeSet);
+        JsFrameworkUpgrade.ExportTypeExcept(exportTypeSet);
         ExportTypeSet = exportTypeSet;
+        OtherExportTypeArray = JsFrameworkUpgrade.ExportTypeArray;
         ExportEnumSet = exportEnumSet;
     }
 
@@ -1482,6 +1505,10 @@ public class {0}
         OnBegin();
 
         foreach (var type in ExportTypeSet)
+        {
+            GenerateClass(type);
+        }
+        foreach (var type in OtherExportTypeArray)
         {
             GenerateClass(type);
         }
@@ -1585,7 +1612,12 @@ public class {0}
     [MenuItem("JSB/Generate JS and CS Bindings", false, 1)]
     public static void GenerateJSCSBindings()
     {
-        if (EditorApplication.isCompiling)
+        GenerateJSCSBindings(true);
+    }
+
+    public static void GenerateJSCSBindings(bool displayDialog)
+    {
+        if (EditorApplication.isCompiling && displayDialog)
         {
             EditorUtility.DisplayDialog("Tip:",
                 "please wait EditorApplication Compiling",
@@ -1596,11 +1628,11 @@ public class {0}
 
         CheckClassBindings();
 
-        bool bContinue = EditorUtility.DisplayDialog("TIP",
+        bool bContinue = !displayDialog ? true : (EditorUtility.DisplayDialog("TIP",
             "Files in these directories will all be deleted and re-created: \n" +
             JSPathSettings.csGeneratedDir + "\n",
             "OK",
-            "Cancel");
+            "Cancel"));
         if (!bContinue)
         {
             Debug.Log("Operation cancelled");
@@ -1610,11 +1642,27 @@ public class {0}
         JSDataExchangeEditor.Reset();
         InitManualFuncInfo();
         GenerateClassBindings();
-        JSGenerator.GenerateJsTypeBindings(ExportTypeSet, ExportEnumSet);
+        var md5 = MD5Hashing.HashFile(JSPathSettings.csExportJsFile);
+        JSGenerator.GenerateJsTypeBindings(ExportTypeSet, ExportEnumSet, OtherExportTypeArray);
+        if (md5 != MD5Hashing.HashFile(JSPathSettings.csExportJsFile))
+        {
+            var warning =
+                "如果还没有定 iOS 框架层或者这是由于不同平台导致的，可以不用管；否则检查是否不小心对框架层做了多余的修改；如果是兼容性热更，请参考 JsFrameworkUpgrade 做出适当的修改，并且看是否需要在业务层使用 try-catch 或者根据框架版本号做兼容性热更";
+
+            if (displayDialog)
+            {
+                EditorApplication.delayCall += () =>
+                EditorUtility.DisplayDialog(
+                    string.Format("{0} MD5 发生变更，可能影响 iOS 热更", Path.GetFileNameWithoutExtension(JSPathSettings.csExportJsFile)), warning, "确定");
+            }
+
+            Debug.LogError(warning);
+        }
         PrintManualFunctionInfo();
 
-        Debug.Log(string.Format("<color={1}>Generate CS Bindings OK. total = {0}</color>", ExportTypeSet.Count,
+        Debug.Log(string.Format("<color={1}>Generate CS Bindings OK. total = {0}</color>", ExportTypeSet.Count + OtherExportTypeArray.Length,
             "orange"));
+        AssetDatabase.SaveAssets();
         AssetDatabase.Refresh();
     }
 
@@ -1657,10 +1705,11 @@ public class {0}
         fileWriter.Write(sb.ToString());
         fileWriter.Close();
 
+        // 没必要清空js导出接口，不方便对比差异
         //清空CSExportTypes.javascript脚本内容
-        fileWriter = OpenFile(JSPathSettings.csExportJsFile, false);
-        fileWriter.Write("this.Enum = {};\n");
-        fileWriter.Close();
+//        fileWriter = OpenFile(JSPathSettings.csExportJsFile, false, false);
+//        fileWriter.Write("this.Enum = {};\n");
+//        fileWriter.Close();
 
         AssetDatabase.Refresh();
     }

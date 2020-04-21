@@ -17,7 +17,7 @@ public static class JSGenerator
         private set;
     }
 
-    public static void GenerateJsTypeBindings(HashSet<Type> exportTypes, HashSet<Type> exportEnums)
+    public static void GenerateJsTypeBindings(HashSet<Type> exportTypes, HashSet<Type> exportEnums, Type[] otherExportTypes)
     {
         OnBegin();
 
@@ -26,6 +26,12 @@ public static class JSGenerator
 
         // classes
         foreach (var type in exportTypes)
+        {
+            List<string> memberNames;
+            GenerateClass(type, out memberNames);
+            allExportInfoDic.Add(JSNameMgr.GetJSTypeFullName(type), memberNames);
+        }
+        foreach (var type in otherExportTypes)
         {
             List<string> memberNames;
             GenerateClass(type, out memberNames);
@@ -444,7 +450,11 @@ jsb_ReplaceOrPushJsType({1});
                 {
                     //如果是System.Type类型参数需要传递其FullName回来
                     //在C#层通过JSDataExchangeMgr.GetTypeByName获取其类型对象
-                    sbActualParam.AppendFormat(", a{0}.get_FullName()", j);
+                    sbActualParam.AppendFormat(", a{0} != null ? a{0}.get_FullName() : null", j);
+                }
+                else if (par.ParameterType == typeof (Exception))
+                {
+                    sbActualParam.AppendFormat(", Error.getException(a{0})", j);
                 }
                 else
                 {
