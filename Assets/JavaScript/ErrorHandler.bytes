@@ -4,6 +4,7 @@
 CS.CSEntry = CS.Call;
 CS.Call = function() {
     var ret = undefined;
+    // ret = CS.CSEntry.apply(CS, arguments);
     try {
         ret = CS.CSEntry.apply(CS, arguments);
     } catch (ex) {
@@ -16,6 +17,7 @@ CS.Call = function() {
         str += ex.stack;
 
         UnityEngine.Debug.LogError$$Object(str);
+        GameDebuger.SendExceptionForJS(str);
     }
     return ret;
 };
@@ -30,11 +32,32 @@ CS.jsFunctionEntry = function() {
     var fun = args[1];
     var ret = undefined;
 
+    // ret = fun.apply(obj, args.slice(2));
     try {
         ret = fun.apply(obj, args.slice(2));
     } catch (ex) {
         var str = "JS Error! Error:\n" + ex + "\n\nStack:\n\n" + ex.stack;
         UnityEngine.Debug.LogError$$Object(str);
+        GameDebuger.SendExceptionForJS(str);
     }
     return ret;
+};
+
+// 覆盖LogException，因为C#那边无法获取到JS的Error
+_jstype = UnityEngine.Debug;
+_jstype.LogException$$Exception$$Object = function(a0/*Exception*/, a1/*Object*/)
+{
+    if (a0 instanceof Error)
+    {
+        var str = "JS Error! Error:\n" + a0 + "\n\nStack:\n\n" + a0.stack;
+        UnityEngine.Debug.LogError$$Object$$Object(str, a1);
+    }
+    else
+    {
+        UnityEngine.Debug.LogError$$Object$$Object(a0.toString(), a1);
+    }
+};
+_jstype.LogException$$Exception = function(a0/*Exception*/)
+{
+    UnityEngine.Debug.LogException$$Exception$$Object(a0, null);
 };

@@ -1,0 +1,413 @@
+var ProtoJsUtilsDefine = function() {
+	if (typeof dcodeIO === 'undefined' || !dcodeIO.ProtoBuf) {
+        throw(new Error("ProtoBuf.js is not present."));
+    }
+    var ProtoBuf = dcodeIO.ProtoBuf;
+    this.protoBuf = ProtoBuf;
+    this.builder = ProtoBuf.newBuilder({ convertFieldsToCamelCase: true });
+    this.logToggle = false;
+
+	/**
+	 * @type {<messageTypeId,message>}
+	 */
+	this.protoMessages = {};
+	/**
+	 * @type {<messageName,messageTypeId>}
+	 */
+	this.protoNames = {};
+	this.dtoFunctions = {};
+	this.msgFunctions = {};
+	this.primitiveTypes = {
+		"boolean" : 1,
+		"double" : 2,
+		"float" : 3,
+		"int32" : 4,
+		"int64" : 5,
+		"string" : 6
+	};
+};
+
+ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY = "(gameobject_message_options).message_type_id";
+ProtoJsUtilsDefine.ROLE_TYPE_OPTION_KEY = "(gameobject_field_options).role_type";
+
+var ProtoJsUtilsPrototype = ProtoJsUtilsDefine.prototype;
+
+ProtoJsUtilsPrototype.info = function(msg) {
+	if(!this.logToggle) return;
+
+	if(typeof console !== 'undefined') {
+		console.info("ProtoJs: " + msg);
+	} else {
+		if(typeof print !== 'undefined') {
+			print("ProtoJs: " + msg);
+		}
+	}
+}
+
+ProtoJsUtilsPrototype.error = function(msg) {
+	if(typeof console !== 'undefined') {
+		//throw new Error("ProtoJs Error: " + msg);
+		console.error("ProtoJs Error: " + msg);
+	} else {
+		if(typeof printError !== 'undefined') {
+			printError("ProtoJs Error: " + msg);
+		}
+	}
+}
+
+ProtoJsUtilsPrototype.loadProto = function(protoString) {
+	this.info("load proto string -> " + protoString);
+	if(!protoString) {
+		if(____h1_proto_message_def_string) {
+			this.protoBuf.loadProto(____h1_proto_message_def_string, this.builder, "AppProto.proto");
+		} else {
+			this.error("____h1_proto_message_def_string not define! Are you require AppProtoDef.javascript?");
+		}
+	} else {
+		this.protoBuf.loadProto(protoString, this.builder, "AppProto.proto");
+	}
+    this.initRoot(this.builder.build());
+}
+
+ProtoJsUtilsPrototype.loadProtoFile = function(protoFile) {
+	this.info("load proto file -> " + protoFile);
+	this.protoBuf.loadProtoFile(protoFile, this.builder);
+    this.initRoot(this.builder.build());
+}
+
+ProtoJsUtilsPrototype.initRoot = function(root) {
+	ProtoJsUtilsDefine.IS_UNITY = (typeof UnityEngine !== 'undefined');
+    var protoDefine = root.AppProtobuf;
+    for(var key in protoDefine) {
+        var protoMessage = protoDefine[key];
+        var messageTypeId = -1;
+        if(protoMessage.$options && (messageTypeId = protoMessage.$options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY])) {
+        	this.protoMessages[messageTypeId] = protoMessage;
+        	this.protoNames[key] = messageTypeId;
+        	this.prepareConverter(messageTypeId, protoMessage);
+        }
+    }
+    this.protos = protoDefine;
+}
+
+ProtoJsUtilsPrototype.createDtoInstance = function(messageTypeId) {
+	if(typeof AppProtobuf.ProtobufMap !== "undefined"){
+		var dtoType = AppProtobuf.ProtobufMap.getClass(messageTypeId);
+		if(dtoType != null){
+			return System.Activator.CreateInstance$$Type(dtoType);
+		}
+		else{
+			printError("messageTypeId: <" + messageTypeId + "> dtoType can not find");
+		}
+	}else{
+		printError("AppProtobuf.ProtobufMap is undefined");
+	}
+	return {};
+}
+
+ProtoJsUtilsPrototype.prepareConverter = function(messageTypeId, protoMessage) {
+	var messageName = protoMessage.$type.name;
+	var me = this;
+	var children = protoMessage.$type.children;
+
+	// fill functions;
+	this.dtoFunctions[messageTypeId] = function(msg, dto) {
+		for(var childIndex=0; childIndex<children.length; childIndex++) {
+			var child = children[childIndex];
+			// FIELD_ROLE_AS_PARENT_CLASS
+			// FIELD_ROLE_IS_TARGET_POLYMORPHISM
+			var fieldRole = child.options[ProtoJsUtilsDefine.ROLE_TYPE_OPTION_KEY];
+			var fieldName = child.name;
+			var fieldTypeName = child.type.name;
+			if ("FIELD_ROLE_AS_PARENT_CLASS" === fieldRole) {
+				var parentMessageTypeId = child.resolvedType.options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY];
+				me.dtoFunctions[parentMessageTypeId](msg[fieldName], dto);
+			} else if(child.repeated) {
+				// 列表或数组
+				var resolvedType = child.resolvedType;
+				var arrMsg = msg[fieldName];
+				if(!resolvedType) {
+					if(!!arrMsg) {
+						if(ProtoJsUtilsDefine.IS_UNITY) {
+							var list = new System.Collections.Generic.List$1.ctor(System.Object.ctor);
+							for(var i=0; i<arrMsg.length; i++) {
+								list.Add(me.fixLong(fieldTypeName, arrMsg[i]));
+							}
+							dto[fieldName] = list;
+						} else {
+							dto[fieldName] = arrMsg;
+						}
+					}
+				} else {
+					var arrDto = ProtoJsUtilsDefine.IS_UNITY ? new System.Collections.Generic.List$1.ctor(System.Object.ctor) : [];
+					if(arrMsg && arrMsg.length>0) {
+						var elType = resolvedType.name;
+						var elMessageTypeId = resolvedType.options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY];
+						var isTypeMessage = false;
+						if("GameObjectTypedMessage" === resolvedType.name) {
+							isTypeMessage = true;
+						}
+						for(var i=0; i<arrMsg.length; i++) {
+							var elMsg = arrMsg[i];
+							var o;
+							if(isTypeMessage) {
+								var o = me.parseFrom(elMsg.messageTypeId, elMsg.messageData);
+							} else {
+								var o = me.createDtoInstance(elMessageTypeId);
+								me.dtoFunctions[elMessageTypeId](elMsg, o);
+							}
+							if(ProtoJsUtilsDefine.IS_UNITY) {
+								arrDto.Add(o);
+							} else {
+								arrDto.push(o);
+							}
+						}
+					}
+					dto[fieldName] = arrDto;
+				}
+			} else {
+				var fieldMsg = msg[fieldName];
+				if(fieldMsg != null) {
+					var resolvedType = child.resolvedType;
+					var fieldMessageTypeId = !!resolvedType ? resolvedType.options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY] : 0; 
+					if("FIELD_ROLE_IS_TARGET_POLYMORPHISM" === fieldRole) {
+						// 单多态属性
+						if("GameObjectTypedMessage" === resolvedType.name) {
+							if(fieldMsg) {
+								var obj = me.parseFrom(fieldMsg.messageTypeId, fieldMsg.messageData);
+								dto[fieldName] = obj;
+							}
+						}
+					} else if(fieldMessageTypeId>0) {
+						var o = me.createDtoInstance(fieldMessageTypeId);
+						me.dtoFunctions[fieldMessageTypeId](fieldMsg, o);
+						dto[fieldName] = o;
+					} else {
+						me.checkAndSet(dto, fieldName, fieldTypeName, fieldMsg);
+					}
+				}
+			}
+		}
+	}
+
+	// packInto functions;
+	this.msgFunctions[messageTypeId] = function(dto, msg) {
+		for(var childIndex=0; childIndex<children.length; childIndex++) {
+			var child = children[childIndex];
+			// FIELD_ROLE_AS_PARENT_CLASS
+			// FIELD_ROLE_IS_TARGET_POLYMORPHISM
+			var fieldRole = child.options[ProtoJsUtilsDefine.ROLE_TYPE_OPTION_KEY];
+			var fieldName = child.name;
+			var fieldTypeName = child.type.name;
+			if ("FIELD_ROLE_AS_PARENT_CLASS" === fieldRole) {
+				var parentMessageTypeId = child.resolvedType.options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY];
+				var parentMsg = me.createMsgInstance(parentMessageTypeId);
+				me.msgFunctions[parentMessageTypeId](dto, parentMsg);
+				msg[fieldName] = parentMsg;
+			} else if(child.repeated) {
+				// 列表或数组
+				var resolvedType = child.resolvedType;
+				var arrDto = dto[fieldName];
+				if(arrDto && arrDto.ToArray) {
+					arrDto = arrDto.ToArray();
+				}
+				if(!resolvedType) {
+					msg[fieldName] = arrDto;
+				} else {
+					var arrMsg = [];
+					if(arrDto && arrDto.length>0) {
+						var elType = resolvedType.name;
+						var elMessageTypeId = resolvedType.options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY];
+						var isTypeMessage = false;
+						if("GameObjectTypedMessage" === resolvedType.name) {
+							isTypeMessage = true;
+						}
+						for(var i=0; i<arrDto.length; i++) {
+							var elDto = arrDto[i];
+							if(isTypeMessage) {
+								var o = me.packInto(elDto);
+								arrMsg[i] = o;
+							} else {
+								var elMsg = me.createMsgInstance(elMessageTypeId);
+								me.msgFunctions[elMessageTypeId](elDto, elMsg);
+								arrMsg[i] = elMsg;
+							}
+						}
+					}
+					msg[fieldName] = arrMsg;
+				}
+			} else {
+				var resolvedType = child.resolvedType;
+				var fieldDto = dto[fieldName];
+				if(fieldDto != null) {
+					var fieldMessageTypeId = !!resolvedType ? resolvedType.options[ProtoJsUtilsDefine.TYPE_MESSAGE_OPTION_KEY] : 0; 
+					if("FIELD_ROLE_IS_TARGET_POLYMORPHISM" === fieldRole) {
+						// 单多态属性
+						if(fieldDto && "GameObjectTypedMessage" === resolvedType.name) {
+							var fieldMsg = me.packInto(fieldDto);
+							msg[fieldName] = fieldMsg;
+						}
+					} else if(fieldMessageTypeId>0) {
+						var fieldMsg = me.createMsgInstance(fieldMessageTypeId);
+						me.msgFunctions[fieldMessageTypeId](fieldDto, fieldMsg);
+						msg[fieldName] = fieldMsg;
+					} else {
+						msg[fieldName] = fieldDto;
+					}
+				}
+			}
+		}
+	}
+}
+
+ProtoJsUtilsPrototype.fixLong = function(fieldTypeName, fieldMsg) {
+	if(fieldTypeName === 'int64') {
+		if(fieldMsg.greaterThan(Number.MAX_SAFE_INTEGER)) {
+			return fieldMsg.toString();
+		} else {
+			return fieldMsg.toNumber();
+		}
+	}
+	return fieldMsg;
+}
+
+ProtoJsUtilsPrototype.checkAndSet = function(dto, fieldName, fieldTypeName, fieldMsg) {
+	dto[fieldName] = this.fixLong(fieldTypeName,fieldMsg);
+}
+
+ProtoJsUtilsPrototype.parsePrimitive = function(messageTypeId, data) {
+    var pMsg = this.protoMessages[messageTypeId];
+    if(!pMsg) {
+        this.error("message not found: " + messageTypeId);
+        return null;
+    }
+    return pMsg.decode(data).getValue();
+};
+
+ProtoJsUtilsPrototype.parseObject = function(messageTypeId, data) {
+    var pMsg = this.protoMessages[messageTypeId];
+    if(!pMsg) {
+        this.error("message not found: " + messageTypeId);
+        return null;
+    }
+    var obj = pMsg.decode(data);
+    var dtoFunction = this.dtoFunctions[messageTypeId];
+    var dto = this.createDtoInstance(messageTypeId);
+    if(dtoFunction) {
+    	dtoFunction(obj,dto);
+    }
+    return dto;
+};
+
+ProtoJsUtilsPrototype.parseFrom = function(messageTypeId, data) {
+	if(messageTypeId<=100) {
+        return this.parsePrimitive(messageTypeId, data);
+    } else {
+        return this.parseObject(messageTypeId, data);
+    }
+};
+
+ProtoJsUtilsPrototype.parseBase64 = function(base64String) {
+	this.info("start to parse string -> " + base64String);
+	var GameObjectTypedMessage = this.protos.GameObjectTypedMessage;
+    var typeMessage = GameObjectTypedMessage.decode(base64String);
+    return this.parseFrom(typeMessage.messageTypeId, typeMessage.messageData);
+}
+
+ProtoJsUtilsPrototype.getMessageName = function(dto) {
+	return dto.getTypeName();
+}
+
+ProtoJsUtilsPrototype.createMsgInstance = function(messageTypeId) {
+	var ProtoMessage = this.protoMessages[messageTypeId];
+	if(!ProtoMessage) {
+		this.error("can' found message builder for: " + messageTypeId);
+		return;
+	}
+	return new ProtoMessage();
+}
+
+ProtoJsUtilsPrototype.packInto = function(dto, messageTypeId) {
+	if (!messageTypeId) {
+		if (typeof dto === "boolean") {
+			messageTypeId = 1;
+		} else if (typeof dto === "number") {
+			messageTypeId = 3;
+		} else if (typeof dto === "string") {
+			messageTypeId = 6;
+		}
+
+		if (!messageTypeId) {
+			var messageName = this.getMessageName(dto);
+			messageTypeId = this.protoNames[messageName];
+		}
+
+		if (messageTypeId <= 0) {
+			this.error("can' found message type for: " + dto);
+			return;
+		}
+	}
+
+	var msg = this.createMsgInstance(messageTypeId);
+	if(messageTypeId<=100) {
+		msg.setValue(dto);
+	} else {
+		var msgFunction = this.msgFunctions[messageTypeId];
+		if(!msgFunction) {
+			this.error("can' found message pack function for: " + messageTypeId + ", dto: " + dto);
+			return;
+		}
+		msgFunction(dto, msg);
+	}
+	
+	var GameObjectTypedMessage = this.protos.GameObjectTypedMessage;
+	var typeMessage = new GameObjectTypedMessage();
+	typeMessage.messageTypeId = messageTypeId;
+	typeMessage.messageData = msg.encode();
+	return typeMessage;
+}
+
+ProtoJsUtilsPrototype.encodeToBase64 = function(dto) {
+	this.info("start method -> encodeToBase64");
+	//对于服务器请求需要特殊处理,要将所有参数都用GameObjectTypedMessage包裹起来
+	var messageName = this.getMessageName(dto);
+	if(messageName == 'GeneralRequest') {
+		return this.requestToBase64(dto);
+	}
+	var typeMessage = this.packInto(dto);
+	return typeMessage.toBase64();
+}
+
+ProtoJsUtilsPrototype.requestToBase64 = function(request) {
+	var messageTypeId = 106;
+	var GeneralRequest = this.protos.GeneralRequest;
+	var rawRequest = new GeneralRequest();
+
+	rawRequest.serial = request.serial;
+	rawRequest.sid = request.sid;
+	rawRequest.action = request.action;
+	rawRequest.needResponse = request.needResponse;
+
+	var paramTypes = ____h1_proto_requests[request.action];
+	if(request.xparams && paramTypes) {
+		rawRequest.xparams = [];
+		var xparams = ProtoJsUtilsDefine.IS_UNITY ? request.xparams._list : request.xparams;
+
+		if(paramTypes.length != xparams.length) {
+			this.error("action params types not match! action: " + request.action);
+			return null;
+		}
+		for(var i=0; i<paramTypes.length; i++) {
+			var paramMsg = this.packInto(xparams[i], paramTypes[i]);
+			rawRequest.xparams.push(paramMsg);
+		}
+	}
+
+	var GameObjectTypedMessage = this.protos.GameObjectTypedMessage;
+	var typeMessage = new GameObjectTypedMessage();
+	typeMessage.messageTypeId = messageTypeId;
+	typeMessage.messageData = rawRequest.encode();
+	return typeMessage.toBase64();
+}
+
+ProtoJsUtils = new ProtoJsUtilsDefine();

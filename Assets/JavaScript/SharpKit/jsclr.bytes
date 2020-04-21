@@ -44,17 +44,17 @@ if (typeof($CreateException)=='undefined')
 
 if (typeof ($CreateAnonymousDelegate) == 'undefined') {
     var $CreateAnonymousDelegate = function (target, func) {
-        //if (target == null || func == null)
-        //    return func;
-        //var delegate = function () {
-        //    return func.apply(target, arguments);
-        //};
-        //delegate.func = func;
-        //delegate.target = target;
-        //delegate.isDelegate = true;
-        //return delegate;
+        if (target == null || func == null)
+           return func;
+        var delegate = function () {
+           return func.apply(target, arguments);
+        };
+        delegate.func = func;
+        delegate.target = target;
+        delegate.isDelegate = true;
+        return delegate;
 
-        return $CreateDelegate(target, func);
+        // return $CreateDelegate(target, func);
     }
 }
 
@@ -104,7 +104,10 @@ function $CombineDelegates(del1,del2)
     }
     else
     {
-        del.delegates.push(del1);
+        //忽略框架层的委托方法,只将js层委托合并,否则框架层与js层混用同一个委托方法时会调用异常,例如:UICamera.onScreenResize
+        //这只是一种兼容处理办法,实际上是不允许js与C#混用同一委托方法的,因为当在js中注册该委托时会覆盖掉先前在框架层注册过的回调.
+        if(del1.constructor != JSRepresentedObject.ctor)
+            del.delegates.push(del1);
     }
     if(del2.isMulticastDelegate)
     {
@@ -113,7 +116,8 @@ function $CombineDelegates(del1,del2)
     }
     else
     {
-        del.delegates.push(del2);
+        if(del2.constructor != JSRepresentedObject.ctor)
+            del.delegates.push(del2);
     }
     return del;
 };
@@ -295,12 +299,20 @@ function As(obj, typeOrName){
     return null;
 };
 function Cast(obj, typeOrName){
-    // don't need cast
-    return obj;
 
     if (obj == null)
         return obj;
     var type = JsTypeHelper.GetType(typeOrName, true);
+
+    // 仅对数值类型的做处理
+    if (type == System.Int64 || type == System.Int32)
+    {
+        return parseInt(obj);
+    }
+
+    // don't need cast
+    return obj;
+
     if (Is(obj, type))
         return obj;
     var converted = TryImplicitConvert(obj, type);
@@ -393,6 +405,13 @@ function Default(T){
     }
     if(T == System.Single.ctor || T == System.Double.ctor){
         return 0;
+    }
+
+    var type = JsTypeHelper.GetType(T);
+    //if (type.Kind == "Struct" && type.fullname != "System.Nullable$1")
+    if (type != null && type.Kind == "Struct")
+    {
+        return new type.ctor();
     }
 
     return null;
@@ -489,6 +508,7 @@ JsCompiler.Compile_Phase1 = function (){
         else {
             jsType.name = fullName.substring(index + 1);
             jsType.ns = fullName.substring(0, index);
+            jsType.errorns = jsType.ns;
         }
         if (jsType.Kind == "Enum"){
             if (jsType.baseTypeName == null)
@@ -556,6 +576,29 @@ JsCompiler.Compile_Phase1 = function (){
 JsCompiler.Compile_Phase2 = function (){
     for (var i = 0; i < JsTypes.length; i++){
         var jsType = JsTypes[i];
+
+        // 检查错误的 ns
+        while (jsType.ns != null)
+        {
+            var ns = jsType.ns;
+            if (JsCompiler.Types[ns] != null)
+            {
+                var index = ns.lastIndexOf(".");
+                if (index == -1)
+                {
+                    jsType.ns = null;
+                }
+                else
+                {
+                    jsType.ns = ns.substring(0, index);
+                }
+            }
+            else
+            {
+                break;
+            }
+        }
+
         JsCompiler.Compile_Phase2_TmpType(jsType);
     }
     // by qiucw
@@ -604,9 +647,8 @@ JsCompiler.Compile_Phase2_TmpType = function (tmpType){
     if (type != null)
         JsCompiler.CopyMemberIfNotDefined(type, type.fullname, window);
 
-
-    if (type.ns != null){
-        var ns = JsCompiler.ResolveNamespace(type.ns);
+    if (type.errorns != null){
+        var ns = JsCompiler.ResolveNamespace(type.errorns);
         if (type != null) {
 			// !
 			// Assume JsType = [..., A.B.C, A.B, ...]
@@ -723,7 +765,10 @@ JsCompiler.ResolveNamespace = function (nsText){
         var token = tokens[i];
         if (typeof(ns[token]) == "undefined")
             ns[token] = {};
-        ns[token].name = tokens.slice(0, i).join(".");
+        if (ns[token].errorns == null)
+        {
+            ns[token].name = tokens.slice(0, i).join(".");
+        }
         ns = ns[token];
     }
     return ns;
@@ -872,6 +917,13 @@ JsCompiler.GetHashKey = function (obj){
         return "undefined";
     if (obj == null)
         return "null";
+
+    // 得看一下需不需要和valueof换位置
+    if (obj.getType().assemblyName == "SharpKitProj" && obj.getType().definition.GetHashCode)
+    {
+        return obj.GetHashCode();
+    }
+
     if (obj.valueOf)
         obj = obj.valueOf();
     var type = typeof(obj);

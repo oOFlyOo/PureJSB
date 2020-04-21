@@ -1,5 +1,4 @@
-﻿
-if (typeof(JsTypes) == "undefined")
+﻿if (typeof(JsTypes) == "undefined")
     var JsTypes = [];
 var System$Activator = {
     fullname: "System.Activator",
@@ -75,8 +74,19 @@ var System$Array = {
         Sort$$Array$$IComparer: function (array, cmp){
             System.Array.Sort$1$$T$Array$$IComparer$1(System.Object.ctor, array, cmp);
         },
-        Copy: function (sourceArray, destinationArray, length) {
-            System.Array.Copy$2(sourceArray, 0, destinationArray, 0, length);
+        // Copy: function (sourceArray, destinationArray, length) {
+        //     System.Array.Copy$2(sourceArray, 0, destinationArray, 0, length);
+        // },
+        Copy: function (sourceArray, sourceIndex, destinationArray, destinationIndex, length) {
+            // 区分不出来，也只能增加参数来做处理了
+            if (destinationIndex == null && length == null)
+            {
+                System.Array.Copy$2(sourceArray, 0, sourceIndex, 0, destinationArray);
+            }
+            else
+            {
+                System.Array.Copy$2(sourceArray, sourceIndex, destinationArray, destinationIndex, length);
+            }
         },
         Copy$2: function (sourceArray, sourceIndex, destinationArray, destinationIndex, length) {
             if (sourceArray == destinationArray) {
@@ -108,7 +118,15 @@ var System$Array = {
                 array2[i] = converter(array[i]);
             }
             return array2;
-        }
+        },
+        IndexOf: function(array, item)
+        {
+            if (array == null) {
+                throw $CreateException(new System.ArgumentNullException.ctor$$String("array"), new Error());
+            }
+
+            return array.indexOf(item);
+        },
     },
     assemblyName: "SharpKit.JsClr",
     Kind: "Class",
@@ -723,6 +741,35 @@ var System$DateTime = {
             System.DateTime.MaxValue.setUTCFullYear(9999, 11, 31);
             System.DateTime.MaxValue.setHours(11,59,59,999);
         },
+        TryParse$$String$$DateTime: function (str, out){
+                        // Date.parse对以下格式不支持
+            // "2016-4-8"
+            // "2016-4-8 18:40"
+            // "2016-4-8 18:40:28"
+            // "2016-04-08" (可以解析出日期,但时间不对)
+            // "2016-04-08 18:40"
+            // "2016-04-08 18:40:28"
+            //可能是SpiderMonkey旧版本的bug,在Chrome下测试是支持的
+            //所以需要转换成这种2016/4/8才能正常解析
+            str = str.replace(/-/g, "/");
+            var ms = Date.parse(str);
+            if (isNaN(ms)) {
+                if (/^(\d+:?)+$/i.test(str)) {
+                    var result = str.split(':');
+                    var dt = new Date();
+                    dt.set_Hour(parseInt(result[0]));
+                    result.length > 1 ? dt.set_Minute(parseInt(result[1])) : dt.set_Minute(0);
+                    result.length > 2 ? dt.set_Second(parseInt(result[2])) : dt.set_Second(0);
+                    return dt;
+                }
+                // throw $CreateException(new System.FormatException.ctor$$String("String does not contain a valid string representation of a date and time."), new Error());
+                printError("String does not contain a valid string representation of a date and time.\n" + str);
+                out.Value = new Date(0);
+                return false;
+            }
+            out.Value = new Date(ms);
+            return true;
+        },
         Parse$$String: function (str){
             // Date.parse对以下格式不支持
             // "2016-4-8"
@@ -811,7 +858,7 @@ var System$DateTime = {
             x.setSeconds(0);
             x.setMilliseconds(0);
             return x;
-        }
+        },
     },
     definition: {
         ctor: function (){
@@ -847,7 +894,15 @@ var System$DateTime = {
         },
         GetHashCode: function (){
             return this.valueOf();
-        }
+        },
+        IsLeapYear: function (){
+            var year = this.getFullYear();
+            return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0);
+        },
+        Equals$$DateTime: function(t1)
+        {
+            return this.valueOf() == t1.valueOf();
+        },
     }
 };
 JsTypes.push(System$DateTime);
@@ -954,6 +1009,20 @@ var System$Action$3 = {
     }
 };
 JsTypes.push(System$Action$3);
+var System$Action$4 = {
+    fullname: "System.Action$4",
+    Kind: "Delegate",
+    definition: {
+        ctor: function (T1, T2, T3, T4, obj, func){
+            this.T1 = T1;
+            this.T2 = T2;
+            this.T3 = T3;
+			this.T4 = T4;
+            System.MulticastDelegate.ctor.call(this, obj, func);
+        }
+    }
+};
+JsTypes.push(System$Action$4);
 var System$Func$1 = {
     fullname: "System.Func$1",
     Kind: "Delegate",
@@ -1045,7 +1114,7 @@ var System$Enum = {
                 throw $CreateException(new System.ArgumentNullException.ctor$$String("enumType"), new Error());
             var jsType = enumType._JsType;
             for (var p in jsType.staticDefinition)
-                if (p == value)
+                if (p == value || jsType.staticDefinition[p] == value)
                     return p;
             throw $CreateException(new System.ArgumentException.ctor$$String("value"), new Error());
         },
@@ -1082,6 +1151,21 @@ var System$Enum = {
                 if (ignoreCase ? p.toUpperCase() == value.toUpperCase() : p == value)
                     return jsType.staticDefinition[p];
             throw $CreateException(new System.ArgumentException.ctor$$String("value is a name, but not one of the named constants defined for the enumeration."), new Error());
+        },
+        IsDefined: function(enumType, value)
+        {
+            if (enumType == null)
+                throw $CreateException(new System.ArgumentNullException.ctor$$String("enumType"), new Error());
+            var jsType = enumType._JsType;
+            for (var p in jsType.staticDefinition)
+            {
+                var val = jsType.staticDefinition[p];
+                if (/*typeof(val) == typeof(value) && */val == value)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
     },
     assemblyName: "SharpKit.JsClr",
@@ -1157,7 +1241,14 @@ var System$Exception = {
         toString: function (){
             var ie = this.get_InnerException();
             if (ie == null)
+            {
+                if (this.get_Message() == null)
+                {
+                    //print(this);
+                    return "";
+                }
                 return this.get_Message();
+            }
             return this.get_Message() + ", " + this.get_InnerException();
         },
         SetErrorCode: function (hr){
@@ -1893,6 +1984,12 @@ Date.prototype.Equals$$Object = function (obj){
         return false;
     return obj.valueOf() == this.valueOf();
 };
+Date.prototype.Equals$$DateTime = function(t1)
+{
+    if (t1 == null)
+        return false;
+    return this.valueOf() == t1.valueOf();
+};
 Date.prototype.GetHashCode = function (){
     return this.valueOf();
 };
@@ -2280,10 +2377,26 @@ Date.prototype.ToShortDateString = function(){
     return Date.format(this,"M/d/yyyy");
 };
 Date.prototype.isDate = function(obj){
+    return Date.isDate(obj);
+};
+Date.isDate = function(obj){
     return Object.prototype.toString.call(obj) === "[object Date]";
 };
 //--------------Date Extension--------------
-
+//--------------Error Extension--------------
+Error.getException = function(error)
+{
+    if (error instanceof Error)
+    {
+        var str = "JS Error! Error:\n" + error + "\n\nStack:\n\n" + error.stack;
+        return new UnityEngine.UnityException.ctor$$String(str);
+    }
+    else
+    {
+        return error;
+    }
+}
+//--------------Error Extension--------------
 //--------------Number Extension--------------
 var NumberFormatInfo = {
     numberNegativePatterns: ["(n)", "-n", "- n", "n-", "n -"],
@@ -2816,6 +2929,9 @@ Number.prototype.CompareTo$$Int32 = function (value){
 Number.prototype.CompareTo$$Int64 = function (value){
     return this.CompareTo(value);
 };
+Number.prototype.Equals$$Int32 = function (value){
+    return this == value;
+};
 //--------------Number Extension--------------
 Boolean.prototype.CompareTo$$Boolean = function (obj) {
     if (this == obj)
@@ -2836,7 +2952,7 @@ var System$Nullable$1 = {
             this.value = null;
             System.Object.ctor.call(this);
             this.value = value;
-            this.hasValue = true;
+            this.hasValue = this.value != null;
         },
         HasValue$$: "System.Boolean",
         get_HasValue: function (){
@@ -2946,9 +3062,9 @@ var System$Char = {
         IsDigit$$Char: function (s){
             return /[0-9]/.test(s);
         },
-		IsNumber$$Char: function (s){
-			return this.IsDigit$$Char(s);
-		}
+        IsNumber$$Char: function (s){
+            return this.IsDigit$$Char(s);
+        }
     },
     assemblyName: "SharpKit.JsClr",
     Kind: "Class",
@@ -3292,9 +3408,10 @@ var System$TimeSpan = {
         },
         Subtract: function (ts){
             var num = this._ticks - ts._ticks;
-            if (this._ticks >> 63 != ts._ticks >> 63 && this._ticks >> 63 != num >> 63){
-                throw $CreateException(new System.OverflowException.ctor$$String("Overflow_TimeSpanTooLong"), new Error());
-            }
+            // 这里在JS的处理上可能不一致，先屏蔽了
+            // if (this._ticks >> 63 != ts._ticks >> 63 && this._ticks >> 63 != num >> 63){
+            //     throw $CreateException(new System.OverflowException.ctor$$String("Overflow_TimeSpanTooLong"), new Error());
+            // }
             return new System.TimeSpan.ctor$$Int64(num);
         }
     }
@@ -3727,6 +3844,21 @@ var System$ValueType = {
     definition: {
         ctor: function (){
             System.Object.ctor.call(this);
+        },
+        GetHashCode: function () {
+            var value = this;
+            if (value.valueOf)
+            {
+                value = value.valueOf();
+            }
+            
+            var type = typeof(value);
+            if (type == "number" || type == "boolean")
+            {
+                return SharpKit.JavaScript.Utils.Js.GetHashKey(this);
+            }
+
+            return System.Object.commonPrototype.GetHashCode.call(this);
         }
     }
 };
@@ -3769,33 +3901,117 @@ Object.ctor = Object;
 Array.ctor = Array;
 Date.ctor = Date;
 Function.ctor = Function;
+Function.prototype.GetInvocationList = function()
+{
+    var dels = null;
+    if (this.isMulticastDelegate)
+    {
+        dels = this.delegates;
+    }
+    else if (this.isDelegate)
+    {
+        dels = [this];
+    }
+    else
+    {
+		dels = [this];
+        //printError("Should not use GetInvocationList in no delegate!");
+    }
+
+    return dels;
+}
+Function.prototype.get_Target = function()
+{
+    return this.target;
+}
 // if (typeof (ActiveXObject) != "undefined")
 //     ActiveXObject.ctor$$String = ActiveXObject;
 Number.Parse = function(T, s, style) {
-    if (style != 7 && style != 515 && style != 167)
+    var value = Number(s);
+    if (style != 7 && style != 515 && style != 167 || isNaN(value))
+    {
         throw $CreateException(new System.NotSupportedException.ctor$$String("Unsupported number style"), new Error());
+    }
+
     var t = T;
     var isFloat = (t == System.Single) || (t == System.Double);
     var isHex = (style == 515);
-    var result = isFloat ? parseFloat(s) : isHex ? parseInt(s, 16) : parseInt(s);
-    if (isNaN(result))
-        throw $CreateException(new System.FormatException.ctor$$String("Input string was not in a correct format."), new Error());
-    if (!isFloat && (result < t.MinValue || result > t.MaxValue))
-        throw $CreateException(new System.OverflowException.ctor$$String("Value was either too large or too small for "), new Error());
-    return result;
+    if (!isFloat)
+    {
+        if (Number.isInteger(value))
+        {
+            if (t != System.Int64 && Number.IsInterger64(s))
+            {
+                throw $CreateException(new System.FormatException.ctor$$String("Input string was int64 but want to parse to int32"), new Error());
+            }
+
+            if (!Number.IsSafeInteger(s))
+            {
+                value = s;
+            }
+            else
+            {
+                value = isHex ? parseInt(s, 16) : parseInt(s);
+            }
+        }
+        else
+        {
+            throw $CreateException(new System.FormatException.ctor$$String("Input string was not a integer but want to parse to integer"), new Error());
+        }
+    }
+    return value;
 }
 Number.TryParse = function(T, s, style, out){
-    if (style != 7 && style != 515 && style != 167)
-        throw $CreateException(new System.NotSupportedException.ctor$$String("Unsupported number style"), new Error());
+    out.Value = 0;
+
+    if (s == null || s.length == 0)
+    {
+        return false;
+    }
+
+    var value = Number(s);
+    if (style != 7 && style != 515 && style != 167 || isNaN(value))
+    {
+        return false;
+    }
+
     var t = T;
     var isFloat = (t == System.Single) || (t == System.Double);
     var isHex = (style == 515);
-    out.Value = 0;
-    var value = isFloat ? parseFloat(s) : isHex ? parseInt(s, 16) : parseInt(s);
-    if (isNaN(value) || (!isFloat && (value < t.MinValue || value > t.MaxValue)))
-        return false;
+    if (!isFloat)
+    {
+        if (Number.isInteger(value))
+        {
+            if (t != System.Int64 && Number.IsInterger64(s))
+            {
+                return false;
+            }
+
+            if (!Number.IsSafeInteger(s))
+            {
+                value = s;
+            }
+            else
+            {
+                value = isHex ? parseInt(s, 16) : parseInt(s);
+            }
+        }
+        else
+        {
+            return false;
+        }
+    }
     out.Value = value;
+
     return true;
+}
+Number.IsInterger64 = function(str)
+{
+    return dcodeIO.Long.fromString(str).greaterThan(System.Int32.MaxValue);
+}
+Number.IsSafeInteger = function(str)
+{
+    return !dcodeIO.Long.fromString(str).greaterThan(Number.MAX_SAFE_INTEGER);
 }
 Number.prototype.get_Value = function () //nullable support
 {
@@ -3876,6 +4092,27 @@ Number.prototype.TryFormatStandard = function (format) {
                 result = s;
                 break;
             }
+        case 48 : /*'0'*/ // 0.00
+            {
+                precision = format.length - 2;
+                if (precision <= -1) {
+                    precision = 2;
+                }
+                result = this.toFixed(precision);
+                result = parseFloat(result).toString();
+                break;
+            }
+        case 35 : /*'#'*/ // #0.00 其实是多余的
+        {
+            precision = format.split('.')[1].length;
+            if (precision <= -1) {
+                precision = 2;
+            }
+            result = this.toFixed(precision);
+            // 如果原本就是浮点数，那么后面多余的0？
+            result = parseFloat(result).toString();
+            break;
+        }
         default:
             throw $CreateException(new System.Exception.ctor$$String("format " + format + " is invalid or not supported."), new Error());
     }
@@ -3889,10 +4126,10 @@ if (ENABLE_PROFILER) {
     BeforeCompilation(function () { Profiler.Initialize(); });
 }
 //var envDebugFunction = (typeof (Debug) != "undefined" && Debug != null && Debug.writeln) ||
-//											 (typeof (console) != "undefined" && console != null && console.log) ||
-//											 function (t) { };
+//                                           (typeof (console) != "undefined" && console != null && console.log) ||
+//                                           function (t) { };
 //if (typeof (Debug) != "undefined")
-//	var Debug = { writeln: envDebugFunction }
+//  var Debug = { writeln: envDebugFunction }
 
 Array.parse = function (value) {
     return eval('(' + value + ')');
@@ -3907,7 +4144,7 @@ JsTypes.push(
             return this.constructor._type.fullname;
         },
         construct: function (type) {
-            //		arguments.callee.caller._type.baseType.ctor.apply(this, arguments);
+            //      arguments.callee.caller._type.baseType.ctor.apply(this, arguments);
             type.baseType.ctor.apply(this, arguments);
         },
         GetType: function () {
@@ -3931,7 +4168,11 @@ JsTypes.push(
             if (this.__hashCode == null)
                 this.__hashCode = ((Math.random() * 4294967296) | 0);
             return this.__hashCode;
-        }
+        },
+        Equals$$Object: function (x) {
+            // 为了Enum添加
+            return this == x;
+        },
     }, staticDefinition:
     {
         Equals$$Object$$Object: function (x, y) {
@@ -4149,6 +4390,9 @@ JsTypes.push({ fullname: "Array", baseTypeName: "Object", definition:
     },
     get_Item$$Int32: function (index) {
         return this[index];
+    },
+    Reverse: function() {
+        this.reverse();
     }
 }
 });
@@ -4328,6 +4572,13 @@ JsTypes.push({ fullname: "System.String", baseTypeName: "System.Object", definit
             array = Array.prototype.slice.call(array, startIndex, startIndex + length);
         return array.join("");
     },
+    ctor$$Char$$Int32: function(ch, count){
+        var tStr = new String();
+        for(var i = 0;i < count; i++){
+            tStr += ch;
+        }
+        return tStr;
+    },
     GetEnumerator: function () {
         return new System.CharEnumerator.ctor$$String(this);
     },
@@ -4335,34 +4586,49 @@ JsTypes.push({ fullname: "System.String", baseTypeName: "System.Object", definit
         return Typeof(System.String);
     },
     //Insert$$Int32$$String: function (startIndex, str) {
-	Insert: function (startIndex, str) {
+    Insert: function (startIndex, str) {
         var sub1 = this.substring(0, startIndex);
         var sub2 = this.substring(startIndex);
         return sub1 + str + sub2;
     },
-    Split$$Char$Array: function (varargs) {
-        if (arguments.length != 1) {
-            var re = "[";
-            for (var i = 0; i < arguments.length; i++) {
-                re += arguments[i];
+    Split$$Char$Array: function (args) {
+       	var re = args;
+        if (args.length != 1)
+        {
+            re = "/[";
+            for (var i = 0; i < args.length; i++)
+            {
+                re += args[i];
             }
-            re += "]";
-            var regExp = new RegExp(re);
-            var arr = this.split(regExp);
-            ////////////////////// Fix for FireFox
-            if (isMoz) {
-                var arr2 = [];
-                for (var i = 0, j = arr.length; i < j; i++) {
-                    if (arr[i].length > 0)
-                        arr2.push(arr[i]);
-                }
-                arr = arr2;
-            }
-            ////////////////////////
-            return arr;
+            re += "]/";
+            re = eval(re);
         }
-        var firstArg = varargs;
-        return this.split(firstArg); //TODO: escape new value?
+
+        return this.split(re);
+    },
+    Split$$String: function (str)
+    {
+        return this.split(str);
+    },
+    Split$$String$Array: function (array)
+    {
+        // TODO: Support Array Lenght > 1
+        if (array.length != 1)
+        {
+            throw new Error("Not Implemented");
+        }
+
+        return this.Split$$String(array[0]);
+    },
+    Split$$String$Array$$StringSplitOptions: function (array, stringSplitOptions)
+    {
+        var arr = this.Split$$String$Array(array);
+        if (stringSplitOptions == System.StringSplitOptions.RemoveEmptyEntries)
+        {
+            arr = arr.filter((item) => item != "");
+        }
+
+        return arr;
     },
     ReplaceFirst: function (find, replace) {
         return this.replace(find, replace);
@@ -4438,9 +4704,9 @@ JsTypes.push({ fullname: "System.String", baseTypeName: "System.Object", definit
     Remove$$Int32$$Int32: function (start, count) {
         return this.substr(0, start) + this.substr(start + count);
     },
-	Remove$$Int32: function (start) {
-		return this.substr(0, start);
-	},
+    Remove$$Int32: function (start) {
+        return this.substr(0, start);
+    },
     StartsWith$$String: function (str) {
         if (str == null)
             throw new System.ArgumentNullException.ctor();
@@ -4541,6 +4807,10 @@ JsTypes.push({ fullname: "System.String", baseTypeName: "System.Object", definit
         if (length < 0)
             throw $CreateException(new System.ArgumentOutOfRangeException.ctor$$String("length"), new Error());
         return this.substr(startIndex).split("", length);
+    },
+    Equals$$Char: function (obj) {
+        // 估摸JSB转换有问题
+        return this.Equals$$String(obj);
     },
     Equals$$String: function (obj) {
         return this == obj;
@@ -4743,13 +5013,13 @@ var Arguments = function () {
 Arguments.from = function (argsObject, start) {
     //1;
     return Array.prototype.slice.call(argsObject, start);
-    //	var end = argsObject.length;
-    //	var list = new Array();
-    //	for(var i=start;i<end;i++)
-    //	{
-    //		list.push(argsObject[i] || null);
-    //	}
-    //	return list;
+    //  var end = argsObject.length;
+    //  var list = new Array();
+    //  for(var i=start;i<end;i++)
+    //  {
+    //      list.push(argsObject[i] || null);
+    //  }
+    //  return list;
 }
 Arguments.Range = function (argsObject, start, end) {
     if (end == null)
@@ -5579,7 +5849,7 @@ var System$Linq$Enumerable = {
             if (second == null){
                 throw $CreateException(System.Linq.Error.ArgumentNull("second"), new Error());
             }
-            return new System.Linq.Enumerable.TakeIterator.ctor(TSource, first, second);
+            return new System.Linq.Enumerable.ConcatIterator.ctor(TSource, first, second);
         },
         Count$1$$IEnumerable$1: function (TSource, source){
             if (source == null){
@@ -5754,7 +6024,71 @@ var System$Linq$Enumerable = {
                 throw $CreateException(System.Linq.Error.ArgumentNull("source"), new Error());
             }
             return new System.Collections.Generic.List$1.ctor$$IEnumerable$1(TSource, source);
-        }
+        },
+        Sum$1$$IEnumerable$1$$Func$2: function(TSource, source, selector){
+            if (source == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("source"), new Error());
+            }
+            if (selector == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("selector"), new Error());
+            }
+            var tEnumerator = source.GetEnumerator();
+            var tSum = 0;
+            while(tEnumerator.MoveNext()){
+                tSum += selector(tEnumerator.get_Current());
+            }
+            return tSum;
+        },
+        Except$1$$IEnumerable$1$$IEnumerable$1: function *(TSource, first, second){
+            if (first == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("first"), new Error());
+            }
+            if (second == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("second"), new Error());
+            }
+
+            var set = new System.Linq.Set$1.ctor(TSource, null);
+            var secondIterator = second.GetEnumerator();
+            while(secondIterator.MoveNext())
+            {
+                set.Add(secondIterator.get_Current());
+            }
+            var firstIterator = first.GetEnumerator();
+            while(firstIterator.MoveNext())
+            {
+                if (set.Add(firstIterator.get_Current()))
+                {
+                    yield firstIterator.get_Current();
+                }
+            }
+        },
+        All$1: function (TSource, source, predicate){
+            if (source == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("source"), new Error());
+            }
+            if (predicate == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("predicate"), new Error());
+            }
+
+            var it = source.GetEnumerator();
+            while (it.MoveNext()){
+                var local = it.get_Current();
+                if (!predicate(local)){
+                    return false;
+                }
+            }
+
+            return true;
+        },
+        Reverse$1: function (TSource, source){
+            if (source == null){
+                throw $CreateException(System.Linq.Error.ArgumentNull("source"), new Error());
+            }
+            // 这里偷懒快速处理
+            var list = new System.Collections.Generic.List$1.ctor$$IEnumerable$1(TSource, source);
+            list.Reverse();
+            return list;
+        },
     },
     assemblyName: "SharpKit.JsClr",
     Kind: "Class",
@@ -6362,8 +6696,8 @@ var System$Linq$Enumerable$TakeIterator = {
     }
 };
 JsTypes.push(System$Linq$Enumerable$TakeIterator);
-var System$Linq$Enumerable$TakeIterator = {
-    fullname: "System.Linq.Enumerable.TakeIterator",
+var System$Linq$Enumerable$ConcatIterator = {
+    fullname: "System.Linq.Enumerable.ConcatIterator",
     baseTypeName: "System.Object",
     assemblyName: "SharpKit.JsClr",
     interfaceNames: ["System.Collections.Generic.IEnumerator$1", "System.Collections.Generic.IEnumerable$1"],
@@ -6430,11 +6764,62 @@ var System$Linq$Enumerable$TakeIterator = {
         GetEnumerator: function (){
             if (this.State == 0)
                 return this;
-            return new System.Linq.Enumerable.TakeIterator.ctor(this.T, this.First, this.Second);
+            return new System.Linq.Enumerable.ConcatIterator.ctor(this.T, this.First, this.Second);
         }
     }
 };
-JsTypes.push(System$Linq$Enumerable$TakeIterator);
+JsTypes.push(System$Linq$Enumerable$ConcatIterator);
+var System$Linq$Set$1 = {
+    fullname: "System.Linq.Set$1",
+    baseTypeName: "System.Object",
+    assemblyName: "SharpKit.JsClr",
+    interfaceNames: [],
+    Kind: "Class",
+    definition: {
+        ctor: function (T, comparer){
+            this.T = T;
+            this.comparer = null;
+            System.Object.ctor.call(this);
+
+            // 暂时偷懒忽略 comparer
+            this.comparer = comparer;
+            this._list = new Array();
+        },
+        Add: function(item)
+        {
+            return !this.Find(item, true);
+        },
+        Contains: function(item)
+        {
+            return this.Find(item, false);
+        },
+        Remove: function(item)
+        {
+            var index = this._list.indexOf(item);
+            if (index == -1)
+                return false;
+            this._list.RemoveAt(index);
+            return true;
+        },
+        Find: function (item, add){
+            for (var i = 0; i < this._list.length; i++) 
+            {
+                if (this._list[i] == item)
+                {
+                    return true;
+                }
+            }
+
+            if (add)
+            {
+                this._list.push(item);
+            }
+
+            return false;
+        }
+    }
+};
+JsTypes.push(System$Linq$Set$1);
 var System$Linq$Enumerable$SelectManyArrayIterator = {
     fullname: "System.Linq.Enumerable.SelectManyArrayIterator",
     baseTypeName: "System.Linq.Enumerable.Iterator",
@@ -6695,6 +7080,7 @@ var System$Collections$Generic$Dictionary$2 = {
             System.Object.ctor.call(this);
             this._table = new Object();
             this._keys = new Object();
+            this._sort = new Array();
             this._version = 0;
             this._Count = 0;
         },
@@ -6705,6 +7091,7 @@ var System$Collections$Generic$Dictionary$2 = {
             System.Object.ctor.call(this);
             this._table = new Object();
             this._keys = new Object();
+            this._sort = new Array();
             this._version = 0;
             this._Count = 0;
         },
@@ -6715,12 +7102,32 @@ var System$Collections$Generic$Dictionary$2 = {
             System.Object.ctor.call(this);
             this._table = new Object();
             this._keys = new Object();
+            this._sort = new Array();
             this._version = 0;
             this._Count = 0;
         },
+        ctor$$IDictionary$2: function (TKey, TValue, dict){
+            this.TKey = TKey;
+            this.TValue = TValue;
+            this.Comparer = null;
+            System.Object.ctor.call(this);
+            this._table = new Object();
+            this._keys = new Object();
+            this._sort = new Array();
+            this._version = 0;
+            this._Count = 0;
+
+            var enumerator = this.GetEnumerator();
+            while (enumerator.MoveNext()){
+                var item = enumerator.get_Current();
+                this.Add(item.get_Key(), item.get_Value());
+            }
+        },
         GetHashKey: function (key){
             if (this.Comparer != null)
-                return this.Comparer.GetHashCode$$T(key);
+            {
+                return this.Comparer["GetHashCode$$" + this.TKey._type.name](key);
+            }
             return SharpKit.JavaScript.Utils.Js.GetHashKey(key);
         },
         Add: function (key, value){
@@ -6731,8 +7138,13 @@ var System$Collections$Generic$Dictionary$2 = {
             var hashKey = this.GetHashKey(key);
             this._table[hashKey] = value;
             this._keys[hashKey] = key;
+            this._sort.push(hashKey);
             this._Count++;
             this._version++;
+        },
+        Add$$TKey$$TValue: function (key, value)
+        {
+            this.Add(key, value);
         },
         Remove: function (key){
             if (key == null)
@@ -6743,7 +7155,12 @@ var System$Collections$Generic$Dictionary$2 = {
             delete this._keys[hashKey];
             this._version++;
             if(result)
+            {
+                var index = this._sort.indexOf(hashKey);
+                this._sort.RemoveAt(index);
+
                 this._Count--;
+            }
             return result;
         },
         Item$$: "`1",
@@ -6756,7 +7173,11 @@ var System$Collections$Generic$Dictionary$2 = {
         set_Item$$TKey: function (key, value){
             var hashKey = this.GetHashKey(key);
             if(!this.ContainsKey(key))
+            {
+                this._sort.push(hashKey);
                 this._Count++;
+            }
+
             this._table[hashKey] = value;
             this._keys[hashKey] = key;
             this._version++;
@@ -6765,25 +7186,36 @@ var System$Collections$Generic$Dictionary$2 = {
             var hashKey = this.GetHashKey(key);
             return typeof(this._table[hashKey]) != "undefined";
         },
+        ContainsValue: function (value){
+            for (var v in this._table){
+                if(this._table[v] == value){
+                    return true;
+                }
+            }
+            return false;
+        },
         Keys$$: "System.Collections.Generic.ICollection`1[[`0]]",
         get_Keys: function (){
             var keys =  [];
-            for (var p in this._keys){
-                keys.push(this._keys[p]);
+            for (var i = 0; i < this._Count; i++){
+                var hashKey = this._sort[i];
+                keys.push(this._keys[hashKey]);
             }
             return keys;
         },
         Values$$: "System.Collections.Generic.ICollection`1[[`1]]",
         get_Values: function (){
             var values =  [];
-            for (var p in this._table){
-                values.push(this._table[p]);
+            for (var i = 0; i < this._Count; i++){
+                var hashKey = this._sort[i];
+                values.push(this._table[hashKey]);
             }
             return values;
         },
         GetEnumerator: function (){
             var array =  [];
-            for (var hashKey in this._table){
+            for (var i = 0; i < this._Count; i++){
+                var hashKey = this._sort[i];
                 array.push(new System.Collections.Generic.KeyValuePair$2.ctor$$TKey$$TValue(this.TKey, this.TValue, this._keys[hashKey], this._table[hashKey]));
             }
             return array.GetEnumerator();
@@ -6791,14 +7223,22 @@ var System$Collections$Generic$Dictionary$2 = {
         Clear: function (){
             this._keys = new Object();
             this._table = new Object();
+            this._sort.Clear();
             this._version++;
             this._Count = 0;
         },
         TryGetValue: function (key, value){
             var hashKey = this.GetHashKey(key);
             var v = this._table[hashKey];
+
+            var contain = typeof(v) != "undefined";
+            if (!contain)
+            {
+                v = Default(this.TValue); 
+            }
             value.Value = v;
-            return typeof(v) != "undefined";
+
+            return contain;
         },
         Count$$: "System.Int32",
         get_Count: function (){
@@ -6847,7 +7287,11 @@ var System$Collections$Generic$HashSet$1 = {
             return true;
         },
         UnionWith: function (other){
-            throw $CreateException(new System.NotImplementedException.ctor(), new Error());
+            var $it3 = other.GetEnumerator();
+            while ($it3.MoveNext()){
+                var item = $it3.get_Current();
+                this.Add(item);
+            }
         },
         IntersectWith: function (other){
             throw $CreateException(new System.NotImplementedException.ctor(), new Error());
@@ -7026,6 +7470,7 @@ var System$Collections$Generic$List$1 = {
             this._list = null;
             System.Object.ctor.call(this);
             this._list = new Array();
+            this.capacity = capacity;
         },
         RemoveRange: function (index, count){
             this._list.splice(index, count);
@@ -7067,6 +7512,15 @@ var System$Collections$Generic$List$1 = {
         },
         Add: function (item){
             this._list.push(item);
+
+            var length = this.get_Count();
+            if (length > this.capacity)
+            {
+                this.capacity = length;
+            }
+        },
+        get_Capacity: function (){
+            return this.capacity;
         },
         Remove: function (item){
             var index = this._list.indexOf(item);
@@ -7086,14 +7540,14 @@ var System$Collections$Generic$List$1 = {
         IndexOf: function (item){
             return this._list.indexOf(item);
         },
-	    Exists: function (match) {
+        Exists: function (match) {
             for (var i = 0; i < this._list.length; i++) {
                 if (match(this._list[i])) {
                     return true;
                 }
             }
             return false;
-		},
+        },
         IndexOf$$T: function (item) {
             return this._list.indexOf(item);
         },
@@ -7136,6 +7590,9 @@ var System$Collections$Generic$List$1 = {
         Sort$$Comparison$1: function (comparison){
             this._list.sort(comparison);
         },
+		Sort$$IComparer$1: function (comparison){
+            this._list.sort(comparison);
+        },
         ForEach: function (action){
             if (action == null)
                 throw $CreateException(new System.ArgumentNullException.ctor$$String("action"), new Error());
@@ -7153,6 +7610,24 @@ var System$Collections$Generic$List$1 = {
                 }
             }
             return undefined;
+        },
+        FindLast: function (match){
+            if(match == null){
+              throw $CreateException(new System.ArgumentNullException.ctor$$String("match"), new Error());
+            }
+            for (var i = this._list.length - 1;i >= 0; i--){
+                if(match(this._list[i])) return this._list[i];
+            }
+            return undefined;
+        },
+        FindLastIndex: function (match){
+             if(match == null){
+              throw $CreateException(new System.ArgumentNullException.ctor$$String("match"), new Error());
+            }
+            for (var i = this._list.length - 1;i >= 0; i--){
+                if(match(this._list[i])) return i;
+            }
+            return -1;
         },
         FindIndex$$Predicate$1:function (match) {
             return this.FindIndex$$Int32$$Int32$$Predicate$1(0, this._list.length, match);
@@ -7258,6 +7733,29 @@ var System$Collections$Generic$List$1 = {
                     if (en) en.Dispose();
                 }
             }
+        },
+        ConvertAll$1: function(type, converter){
+            if (type == null){
+                throw $CreateException(new System.ArgumentNullException.ctor$$String("type"), new Error());
+            }
+            if (converter == null){
+               throw $CreateException(new System.ArgumentNullException.ctor$$String("converter"), new Error());
+            }
+            var tNewList = new System.Collections.Generic.List$1.ctor(type);
+            for(var i = 0;i < this._list.length;i++){
+                tNewList.Add(converter(this._list[i]));
+            }
+            return tNewList;
+        },
+        TrueForAll: function (match) {
+            if (match == null)
+                throw $CreateException(new System.ArgumentNullException.ctor$$String("match"), new Error());
+            for (var i = 0; i < this._list.length; i++) {
+                if (!match(this._list[i])) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 };

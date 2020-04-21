@@ -1,0 +1,48 @@
+
+var Generator = Object.getPrototypeOf(function* () {});
+
+Generator.prototype.GetEnumerator = function()
+{
+    if (this._state == null)
+    {
+        this.InitEnumerator();
+    }
+
+    this._state = -1;
+
+    return this;
+}
+
+Generator.prototype.get_Current = function ()
+{
+    // return this._value.value;
+
+    return this._array[this._state];
+}
+
+Generator.prototype.MoveNext = function ()
+{
+    // this._value = this.next();
+    // return !this._value.done;
+
+    this._state++;
+
+    return this._state < this._array.length;
+}
+
+Generator.prototype.Dispose = function ()
+{
+    // do nothing
+}
+
+Generator.prototype.InitEnumerator = function ()
+{
+    var array = new Array();
+    var value = this.next();
+    while(!value.done)
+    {
+        array.push(value.value);
+        value = this.next();
+    }
+    this._array = array;
+}

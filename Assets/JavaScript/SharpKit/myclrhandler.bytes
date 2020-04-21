@@ -28,8 +28,23 @@ var print = function() {};
 (function() {
     var uDebug = jsb_GetJsType("UnityEngine.Debug");
     if(uDebug != null){
-        printError = uDebug.staticDefinition.LogError$$Object;
-        print = uDebug.staticDefinition.Log$$Object;
+        printError = function(obj, withoutStack)
+        {
+            if (!withoutStack)
+            {
+                obj = obj + "\n\n" + (new Error()).stack;
+            }
+            uDebug.staticDefinition.LogError$$Object(obj);
+        }
+
+        print = function(obj, withoutStack)
+        {
+            if (!withoutStack)
+            {
+                obj = obj + "\n\n" + (new Error()).stack;
+            }
+            uDebug.staticDefinition.Log$$Object(obj);
+        }
     }
 }());
 

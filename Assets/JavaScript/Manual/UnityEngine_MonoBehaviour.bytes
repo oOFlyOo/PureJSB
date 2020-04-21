@@ -168,6 +168,8 @@ if (_jstype) {
     //JSComponent OnDestroy时调用注销
     _jstype.definition.$UnRegisterJscom = function(){
        _jsComManager.UnRegister(this);
+
+       this.JSComponentOnDestroy = true;
     };
     _jstype.definition.$CheckOutJsType = function(){
         // //检索JsType定义,缓存UpdateEvent的定义情况
@@ -280,8 +282,11 @@ if (_jstype) {
     _jstype.definition.StopAllCoroutines = function() {
         return this.$RemoveAllCoroutines();
     };
-    _jstype.definition.StopCoroutine$$IEnumerator = function(a0/*Coroutine*/) {
+    _jstype.definition.StopCoroutine$$IEnumerator = function(a0/*IEnumerator*/) {
         return this.$RemoveCoroutineByFiber(a0);
+    };
+    _jstype.definition.StopCoroutine$$Coroutine = function(a0/*Coroutine*/) {
+        return this.$RemoveCoroutine(a0);
     };
     _jstype.definition.StopCoroutine$$String = function(a0/*String*/) {
         return this.$RemoveCoroutineByName(a0);
@@ -547,3 +552,26 @@ if (_jstype) {
         cn.next = undefined;
     };
 }
+
+
+//============重定义Component部分方法============
+// _jstype = UnityEngine.Component;
+_jstype = jsb_GetJsType("UnityEngine.Component");
+_jstype.definition.$get_gameObject = _jstype.definition.get_gameObject;
+_jstype.definition.get_gameObject = function () {
+    if (this.JSComponentOnDestroy)
+    {
+        return null;
+    }
+
+    return this.$get_gameObject();
+};
+_jstype.definition.$get_transform = _jstype.definition.get_transform;
+_jstype.definition.get_transform = function () {
+    if (this.JSComponentOnDestroy)
+    {
+        return null;
+    }
+
+    return this.$get_transform();
+};

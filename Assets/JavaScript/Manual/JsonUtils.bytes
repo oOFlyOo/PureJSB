@@ -1,14 +1,14 @@
 (function() {
-    function _parse(json, T, cT) {
-        if (json == null) {
+    function _parse(json, T, cT, typeFixing) {
+        if (json == null || json == null || json.length == 0) {
             return;
         }
 
         var jsObj = JSON.parse(json);
-        return _ParseJsObj(jsObj, JsTypeHelper.GetType(T), JsTypeHelper.GetType(cT));
+        return _ParseJsObj(jsObj, JsTypeHelper.GetType(T), JsTypeHelper.GetType(cT), typeFixing);
     }
 
-    function _ParseJsObj(jsObj, type, cType) {
+    function _ParseJsObj(jsObj, type, cType, typeFixing) {
         if (_IsJsPrimitive(jsObj)) {
             return jsObj;
         }
@@ -18,12 +18,25 @@
             var cT = cType != null ? cType.ctor : System.Object.ctor;
             var list = new System.Collections.Generic.List$1.ctor(cT);
             if (jsObj.length > 0) {
+                // 这里默认作为List来处理，但是有些实际情况是Array，因此这里做特殊处理
+                var index = 0;
                 for (var i = 0; i < jsObj.length; i++) {
-                    var item = _ParseJsObj(jsObj[i], cType);
-                    if (item != null) list.Add(item);
+                    var item = _ParseJsObj(jsObj[i], cType, null, typeFixing);
+                    if (item != null)
+                    {
+                        list[index] = item;
+                        index++;
+                        list.Add(item);
+                    }
                 };
+                list.length = index;
             }
             return list;
+        }
+
+        if (typeFixing != null)
+        {
+            type = typeFixing(jsObj, type);
         }
 
         //类型为空时,检查一下jsObj是否包含_t类型标识字段
@@ -39,22 +52,22 @@
             var cT = cType != null ? cType.ctor : System.Object.ctor;
             var map = new type.ctor(System.String.ctor, cT);
             for (var mk in jsObj) {
-                var item = _ParseJsObj(jsObj[mk], cType);
+                var item = _ParseJsObj(jsObj[mk], cType, null, typeFixing);
                 map.Add(mk, item);
             }
             return map;
         }
 
         //-------Unity ValueType-----------
-        // if (TypeIs(type, UnityEngine.Bounds)) {
-        //     var center = new UnityEngine.Vector3.ctor$$Single$$Single$$Single(jsObj.center.x, jsObj.center.y, jsObj.center.z);
-        //     var size = new UnityEngine.Vector3.ctor$$Single$$Single$$Single(jsObj.size.x, jsObj.size.y, jsObj.size.z);
-        //     return new UnityEngine.Bounds.ctor$$Vector3$$Vector3(center, size);
-        // }
+        if (TypeIs(type, UnityEngine.Bounds)) {
+            var center = new UnityEngine.Vector3.ctor$$Single$$Single$$Single(jsObj.center.x, jsObj.center.y, jsObj.center.z);
+            var size = new UnityEngine.Vector3.ctor$$Single$$Single$$Single(jsObj.size.x, jsObj.size.y, jsObj.size.z);
+            return new UnityEngine.Bounds.ctor$$Vector3$$Vector3(center, size);
+        }
 
-        // if (TypeIs(type, UnityEngine.Rect)) {
-        //     return new UnityEngine.Rect.ctor$$Single$$Single$$Single$$Single(jsObj.x, jsObj.y, jsObj.width, jsObj.height);
-        // }
+        if (TypeIs(type, UnityEngine.Rect)) {
+            return new UnityEngine.Rect.ctor$$Single$$Single$$Single$$Single(jsObj.x, jsObj.y, jsObj.width, jsObj.height);
+        }
 
         // if (TypeIs(type, UnityEngine.RectOffset)) {
         //     return new UnityEngine.RectOffset.ctor$$Int32$$Int32$$Int32$$Int32(jsObj.left, jsObj.right, jsObj.top, jsObj.bottom);
@@ -73,7 +86,7 @@
             var jsField = jsObj[k];
             var csField = csObj[k];
             if (csField === null) {
-                csObj[k] = _ParseJsObj(jsField);
+                csObj[k] = _ParseJsObj(jsField, null, null, typeFixing);
             } else {
                 //基础类型直接赋值
                 if (_IsJsPrimitive(jsField)) {
@@ -84,19 +97,25 @@
                         var map = csField;
                         var eType = JsTypeHelper.GetType(map.TValue);
                         for (var jk in jsField) {
-                            map.Add(jk, _ParseJsObj(jsField[jk], eType));
+                            map.Add(jk, _ParseJsObj(jsField[jk], eType, null, typeFixing));
                         }
                     } else if (Is(csField, System.Collections.Generic.List$1.ctor)) {
                         if (jsField.length > 0) {
                             var list = csField;
                             var eType = JsTypeHelper.GetType(list.T);
                             for (var i = 0; i < jsField.length; i++) {
-                                var item = _ParseJsObj(jsField[i], eType);
+                                var item = _ParseJsObj(jsField[i], eType, null, typeFixing);
                                 if (item != null) list.Add(item);
                             }
                         }
                     } else {
-                        csObj[k] = _ParseJsObj(jsField, csField.getType());
+                        try{
+                            csObj[k] = _ParseJsObj(jsField, csField.getType(), null, typeFixing);
+                        }catch(e){
+                            printError(k+":"+csField);
+                            printError(e.toString());
+                        }
+                        
                     }
                 }
             }
@@ -104,12 +123,17 @@
         return csObj;
     }
 
-    function _toJson(csObj, tFlag) {
-        var jsObj = _ConvertToJsObj(csObj, tFlag);
+    function _toJson(csObj, tFlag, typeFixing) {
+        var jsObj = _ConvertToJsObj(csObj, tFlag, typeFixing);
         return JSON.stringify(jsObj);
     }
 
-    function _ConvertToJsObj(csObj, tFlag) {
+    function _ConvertToJsObj(csObj, tFlag, typeFixing) {
+        if (_IsUnSafeInteger(csObj))
+        {
+            return csObj.toString();
+        }
+
         if (_IsJsPrimitive(csObj)) {
             return csObj;
         }
@@ -119,7 +143,7 @@
             var count = csObj.get_Count();
             if (count > 0) {
                 for (var i = 0; i < count; i++) {
-                    array.push(_ConvertToJsObj(csObj._list[i], tFlag));
+                    array.push(_ConvertToJsObj(csObj._list[i], tFlag, typeFixing));
                 };
             }
             return array;
@@ -130,7 +154,7 @@
             var $it = csObj.GetEnumerator();
             while ($it.MoveNext()) {
                 var v = $it.get_Current();
-                map[v.get_Key()] = _ConvertToJsObj(v.get_Value(), tFlag);
+                map[v.get_Key()] = _ConvertToJsObj(v.get_Value(), tFlag, typeFixing);
             }
             return map;
         }
@@ -156,13 +180,13 @@
             return _WriteColor(csObj);
         }
 
-        // if (Is(csObj, UnityEngine.Bounds.ctor)) {
-        //     return _WriteBounds(csObj);
-        // }
+        if (Is(csObj, UnityEngine.Bounds.ctor)) {
+            return _WriteBounds(csObj);
+        }
 
-        // if (Is(csObj, UnityEngine.Rect.ctor)) {
-        //     return _WriteRect(csObj);
-        // }
+        if (Is(csObj, UnityEngine.Rect.ctor)) {
+            return _WriteRect(csObj);
+        }
 
         // if (Is(csObj, UnityEngine.RectOffset.ctor)) {
         //     return _WriteRectOffset(csObj);
@@ -173,6 +197,12 @@
         if (tFlag) {
             _WriteType(jsObj, csObj.getType());
         }
+
+        if (typeFixing != null && csObj.getType != null)
+        {
+            typeFixing(jsObj, csObj.getType())
+        }
+
         for (var k in csObj) {
             if (!csObj.hasOwnProperty(k))
                 continue;
@@ -180,20 +210,32 @@
             var sv = csObj[k];
             if (sv == null)
                 continue;
-
-            if (typeof sv == "function" || k.charAt(0) == '_' || k.endsWith("$$")) {
+        
+            // _ 这里有点莫名其妙，希望不会有坑
+            if (typeof sv == "function" || k.endsWith("$$") || (typeFixing == null && k.charAt(0) == '_')) {
                 // printError("ConvertToJsObj:" + k + " is ignore.");
                 continue;
             }
 
-            jsObj[k] = _ConvertToJsObj(sv, tFlag);
+            jsObj[k] = _ConvertToJsObj(sv, tFlag, typeFixing);
         }
         return jsObj;
     }
 
     //----------------Helper-------------------
     function _IsJsPrimitive(val) {
+        // 9007199254740992
+        if (_IsUnSafeInteger(val))
+        {
+            printError("Can not surppot long:" + val);
+        }
+
         return (val == null || val == undefined || typeof val == "boolean" || typeof val == "number" || typeof val == "string");
+    }
+
+    function _IsUnSafeInteger(val)
+    {
+        return typeof(val) == "number" && val >= Number.MAX_SAFE_INTEGER;
     }
 
     function _ReadType(obj) {
@@ -281,9 +323,41 @@
     }
     //-------Unity ValueType Writer-----------
 
+    //-------Json.Net-----------
+    function _ReadJsonNetType(jsObj, type) {
+        // 必须处理，坑爹
+        // if (type == null)
+        // {
+            var polyTypeStr = jsObj.$type;
+            if (polyTypeStr != null)
+            {
+                var polyType = JsTypeHelper.GetType(polyTypeStr.substr(0, polyTypeStr.indexOf(",")));
+                
+                // printError(polyType.fullname);
+                if (polyType != null)
+                {
+                    type = polyType;
+                }
+            }
+        // }
+
+        return type;
+    }
+
+    function _WriteJsonNetType(jsObj, type) {
+        if (type != null)
+        {
+            jsObj.$type = type.fullname + ", Assembly-CSharp";
+        }
+    }
+    //-------Json.Net-----------
+
     JsonUtils = {};
     JsonUtils.TypeGetter = null;
     JsonUtils.TypeWritter = null;
     JsonUtils.parse = _parse;
     JsonUtils.stringify = _toJson;
+
+    JsonUtils.ReadJsonNetType = _ReadJsonNetType;
+    JsonUtils.WriteJsonNetType = _WriteJsonNetType;
 })();
