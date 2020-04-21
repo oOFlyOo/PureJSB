@@ -6,7 +6,7 @@ minify()
 	echo "inputFile:" $input
 	echo "outputFile:" $output
 	echo
-	java -Xms256m -Xmx1024m -jar ./JSBExternalTools/closure-compiler/compiler.jar --js $input --js_output_file $output 2>&1
+	java -Xms256m -Xmx1024m -jar ./JSBExternalTools/closure-compiler/compiler.jar --compilation_level WHITESPACE_ONLY --language_out ECMASCRIPT6 --js $input --js_output_file $output 2>&1
 }
 
 for file in $@; do
